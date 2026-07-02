@@ -15,6 +15,8 @@ BASE_TARGET_URL = "https://ft-osint-api.duckdns.org/api"
 DEFAULT_UPSTREAM_KEY = "vx-osint"
 
 # In-Memory Database State
+# NOTE: Because serverless environments prune memory states, keep this tab active.
+# For permanent multi-day storage, bind a Vercel KV / Redis instance here.
 api_keys_db: Dict[str, dict] = {}
 search_logs: List[dict] = []
 
@@ -196,15 +198,32 @@ def index_page():
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght=300;400;600;800&family=Space+Grotesk:wght=400;700&display=swap" rel="stylesheet">
         <style>
-            body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #040406; }
+            body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #040406; overflow-x: hidden; position: relative; }
             .mono { font-family: 'Space Grotesk', sans-serif; }
             .glass-panel { background: rgba(11, 12, 22, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.03); }
+            
+            /* Snowfall Canvas container styling */
+            #snow-canvas {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 0;
+                pointer-events: none;
+            }
+            
+            /* Ensure interactive views stack clearly above snowfall matrix layer */
+            #loginView, #appView { position: relative; z-index: 10; }
         </style>
     </head>
     <body class="text-slate-200 min-h-screen">
 
+        <!-- SNOWFALL ANIMATION CANVAS -->
+        <canvas id="snow-canvas"></canvas>
+
         <!-- LOGIN SCREEN -->
-        <div id="loginView" class="fixed inset-0 bg-[#040406] z-50 flex items-center justify-center p-4">
+        <div id="loginView" class="fixed inset-0 bg-[#040406]/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
             <div class="w-full max-w-md bg-[#0a0b12] border border-slate-900 rounded-2xl p-8 shadow-2xl">
                 <div class="mb-8 text-center">
                     <span class="text-xs uppercase tracking-widest text-indigo-400 font-bold mono">Developed by @vernexzzz</span>
@@ -229,7 +248,7 @@ def index_page():
 
         <!-- APPLICATION CONTAINER -->
         <div id="appView" class="hidden min-h-screen flex flex-col">
-            <header class="border-b border-slate-900 bg-[#07080f]/90 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+            <header class="border-b border-slate-900 bg-[#07080f]/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
                 <div class="flex items-center gap-3">
                     <div class="h-3 w-3 rounded-full bg-indigo-500 animate-pulse"></div>
                     <span class="font-bold tracking-tight text-lg text-white">SHAYAN_EXPLORER <span class="text-indigo-400 text-xs px-2 py-0.5 rounded border border-indigo-500/20 bg-indigo-500/5 ml-1">BY @VERNEXZZZ</span></span>
@@ -244,7 +263,7 @@ def index_page():
                 </div>
             </header>
 
-            <div id="endpointsDrawer" class="hidden bg-[#0a0b12] border-b border-slate-900 p-6">
+            <div id="endpointsDrawer" class="hidden bg-[#0a0b12]/90 border-b border-slate-900 p-6 backdrop-blur-md">
                 <div class="max-w-7xl mx-auto">
                     <h3 class="text-sm font-bold uppercase tracking-wider text-indigo-400 mb-3 mono">Production Target Proxy URLs (Click to Copy instantly)</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="rawUrlsList"></div>
@@ -254,7 +273,7 @@ def index_page():
             <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <!-- Management Engine Panel -->
                 <div class="lg:col-span-1 space-y-6">
-                    <div class="bg-[#080911] border border-slate-900 rounded-2xl p-6">
+                    <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
                             <span>🔑</span> Generate Dynamic Token
                         </h2>
@@ -298,14 +317,14 @@ def index_page():
 
                 <!-- Live Stream Panel -->
                 <div class="lg:col-span-2 space-y-6">
-                    <div class="bg-[#080911] border border-slate-900 rounded-2xl p-6">
+                    <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4">Live Cryptographic Allocation Mapping</h2>
                         <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="keysContainer">
                             <!-- Populated allocations inside loop -->
                         </div>
                     </div>
 
-                    <div class="bg-[#080911] border border-slate-900 rounded-2xl p-6">
+                    <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4 flex items-center justify-between">
                             <span>📡 Live Activity Lookup Telemetry</span>
                         </h2>
@@ -334,6 +353,65 @@ def index_page():
             let globalToolsList = [];
 
             document.getElementById('keyExpiry').value = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+
+            // --- NATIVE LIGHTWEIGHT SNOWFALL ENGINE ---
+            const canvas = document.getElementById('snow-canvas');
+            const ctx = canvas.getContext('2d');
+            let flakes = [];
+
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            function initSnow() {
+                flakes = [];
+                const maxFlakes = window.innerWidth < 768 ? 40 : 100; // Limit snowflakes on mobile for no lag
+                for (let i = 0; i < maxFlakes; i++) {
+                    flakes.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height,
+                        r: Math.random() * 2 + 1, // flake radius
+                        d: Math.random() * maxFlakes, // density
+                        speed: Math.random() * 1 + 0.5
+                    });
+                }
+            }
+
+            function drawSnow() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+                ctx.beginPath();
+                for (let i = 0; i < flakes.length; i++) {
+                    const f = flakes[i];
+                    ctx.moveTo(f.x, f.y);
+                    ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2, true);
+                }
+                ctx.fill();
+                updateSnow();
+            }
+
+            function updateSnow() {
+                for (let i = 0; i < flakes.length; i++) {
+                    const f = flakes[i];
+                    f.y += f.speed;
+                    f.x += Math.sin(f.y / 30) * 0.5; // subtle sway
+
+                    if (f.y > canvas.height) {
+                        flakes[i] = { x: Math.random() * canvas.width, y: -10, r: f.r, d: f.d, speed: f.speed };
+                    }
+                }
+            }
+
+            function runSnowEngine() {
+                drawSnow();
+                requestAnimationFrame(runSnowEngine);
+            }
+            initSnow();
+            runSnowEngine();
+            // ------------------------------------------
 
             async function attemptLogin() {
                 const username = document.getElementById('admUser').value;
