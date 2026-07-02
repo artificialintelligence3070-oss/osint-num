@@ -7,59 +7,39 @@ from fastapi import FastAPI, Request, HTTPException, Depends, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-# Initialize FastAPI instance
 app = FastAPI(title="SHAYAN_EXPLORER API Gateway")
 
-# Configuration Definitions
+# --- ADMINISTRATIVE CREDENTIALS ---
 ADMIN_USER = "vernex"
 ADMIN_PASS = "vernex@16vx"
 BASE_TARGET_URL = "https://ft-osint-api.duckdns.org/api"
-DEFAULT_UPSTREAM_KEY = "vx-osint"
+DEFAULT_UPSTREAM_KEY = "vernex-6a9dc4fdd5923c40b0aba27bf1e39e3f"
 
-# Persistent Storage Paths (Fallback for local disk environments)
-DB_FILE_PATH = "/tmp/api_keys_db.json"
-LOGS_FILE_PATH = "/tmp/search_logs.json"
+# --- PASTE YOUR UPSTASH REDIS DETAILS HERE ---
+# This ensures your keys never delete themselves when Vercel restarts!
+UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "REPLACE_WITH_YOUR_UPSTASH_REST_URL")
+UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "REPLACE_WITH_YOUR_UPSTASH_REST_TOKEN")
 
-# Global In-Memory Fallbacks
-api_keys_db: Dict[str, dict] = {}
-search_logs: List[dict] = []
+HEADERS = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
 
-def load_persistent_data():
-    """Loads database keys and telemetry logs from the local cache system."""
-    global api_keys_db, search_logs
-    # Load Keys
-    if os.path.exists(DB_FILE_PATH):
-        try:
-            with open(DB_FILE_PATH, 'r') as f:
-                api_keys_db = json.load(f)
-        except Exception:
-            api_keys_db = {}
-    else:
-        api_keys_db = {}
-
-    # Load Logs
-    if os.path.exists(LOGS_FILE_PATH):
-        try:
-            with open(LOGS_FILE_PATH, 'r') as f:
-                search_logs = json.load(f)
-        except Exception:
-            search_logs = []
-    else:
-        search_logs = []
-
-def save_persistent_data():
-    """Saves current state rules safely to storage."""
-    global api_keys_db, search_logs
+def db_get(key: str, default):
+    """Fetch database records directly from cloud persistence layer."""
     try:
-        with open(DB_FILE_PATH, 'w') as f:
-            json.dump(api_keys_db, f)
-        with open(LOGS_FILE_PATH, 'w') as f:
-            json.dump(search_logs, f)
+        with httpx.Client() as client:
+            res = client.post(f"{UPSTASH_URL}/get/{key}", headers=HEADERS)
+            data = res.json().get("result")
+            return json.loads(data) if data else default
     except Exception as e:
-        print(f"Storage Sync Error: {str(e)}")
+        print(f"Cloud DB Read Error: {e}")
+        return default
 
-# Perform Initial Startup Sync Load
-load_persistent_data()
+def db_set(key: str, value):
+    """Commit configuration states safely into permanent cloud database clusters."""
+    try:
+        with httpx.Client() as client:
+            client.post(f"{UPSTASH_URL}/set/{key}", content=json.dumps(value), headers=HEADERS)
+    except Exception as e:
+        print(f"Cloud DB Write Error: {e}")
 
 # Expanded Tools Blueprint Catalog
 TOOLS_LIST = [
@@ -107,7 +87,7 @@ class KeyGenRequest(BaseModel):
 # --- REVERSE PROXY GATEWAY ROUTE ---
 @app.get("/gateway/{tool_id}")
 async def gateway_router(tool_id: str, request: Request):
-    load_persistent_data()  # Pull latest key updates
+    api_keys_db = db_get("api_keys", {})
     query_params = dict(request.query_params)
     user_key = query_params.get("key")
     
@@ -124,7 +104,7 @@ async def gateway_router(tool_id: str, request: Request):
         if datetime.date.today() > expiry:
             raise HTTPException(status_code=403, detail="API Key has expired")
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid expiry format in database")
+        raise HTTPException(status_code=400, detail="Invalid expiry format in cloud storage")
         
     if key_data["uses"] >= key_data["limit"]:
         raise HTTPException(status_code=429, detail="API Key request limit reached")
@@ -133,10 +113,10 @@ async def gateway_router(tool_id: str, request: Request):
         raise HTTPException(status_code=403, detail="This key is not authorized to use this specific tool")
 
     tool_config = next((t for t in TOOLS_LIST if t["id"] == tool_id), None)
-    search_query = "Unknown Query"
-    if tool_config:
-        search_query = query_params.get(tool_config["param"], "N/A")
+    search_query = query_params.get(tool_config["param"], "N/A") if tool_config else "N/A"
 
+    # Log updating process
+    search_logs = db_get("search_logs", [])
     search_logs.append({
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "key_name": key_data["name"],
@@ -144,9 +124,10 @@ async def gateway_router(tool_id: str, request: Request):
         "tool": tool_id,
         "query": search_query
     })
+    db_set("search_logs", search_logs[-100:]) # keep last 100 entries
     
     key_data["uses"] += 1
-    save_persistent_data()  # Commit structural tracking count changes
+    db_set("api_keys", api_keys_db)
     
     if not tool_config:
         raise HTTPException(status_code=404, detail="Tool Endpoint Not Found")
@@ -157,26 +138,20 @@ async def gateway_router(tool_id: str, request: Request):
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(f"{BASE_TARGET_URL}/{tool_id}", params=forward_params, timeout=12.0)
-            
             if response.status_code == 200:
                 try:
                     res_data = response.json()
                     if isinstance(res_data, dict):
                         res_data["by"] = "@vernexzzz"
                         res_data["channel"] = "https://t.me/shayan_explorer_channel"
-                        
-                        if "creator" in res_data:
-                            res_data["creator"] = "@vernexzzz"
-                        if "owner" in res_data:
-                            res_data["owner"] = "@vernexzzz"
-                            
+                        if "creator" in res_data: res_data["creator"] = "@vernexzzz"
+                        if "owner" in res_data: res_data["owner"] = "@vernexzzz"
                     return JSONResponse(status_code=response.status_code, content=res_data)
                 except Exception:
                     pass
-                    
             return JSONResponse(status_code=response.status_code, content=response.json())
         except Exception as e:
-            return JSONResponse(status_code=500, content={"error": "Upstream timeout or host down", "details": str(e)})
+            return JSONResponse(status_code=500, content={"error": "Upstream server failure", "details": str(e)})
 
 # --- ADMIN ENDPOINTS ---
 @app.post("/api/admin/login")
@@ -187,16 +162,15 @@ def admin_login(data: LoginRequest):
 
 @app.get("/api/admin/data")
 def get_admin_data():
-    load_persistent_data()
     return {
-        "keys": list(api_keys_db.values()),
-        "logs": search_logs[-100:],
+        "keys": list(db_get("api_keys", {}).values()),
+        "logs": db_get("search_logs", []),
         "tools": TOOLS_LIST
     }
 
 @app.post("/api/admin/keys")
 def create_key(data: KeyGenRequest):
-    load_persistent_data()
+    api_keys_db = db_get("api_keys", {})
     if data.custom_key in api_keys_db:
         raise HTTPException(status_code=400, detail="Key already exists")
     
@@ -209,12 +183,12 @@ def create_key(data: KeyGenRequest):
         "tools": data.allowed_tools,
         "status": "active"
     }
-    save_persistent_data()
+    db_set("api_keys", api_keys_db)
     return {"status": "created"}
 
 @app.post("/api/admin/keys/{key_id}/action")
 def modify_key(key_id: str, action: dict):
-    load_persistent_data()
+    api_keys_db = db_get("api_keys", {})
     if key_id not in api_keys_db:
         raise HTTPException(status_code=404, detail="Key not found")
     
@@ -231,10 +205,10 @@ def modify_key(key_id: str, action: dict):
         api_keys_db[key_id]["limit"] = action.get("limit")
         api_keys_db[key_id]["expiry"] = action.get("expiry")
         
-    save_persistent_data()
+    db_set("api_keys", api_keys_db)
     return {"status": "updated"}
 
-# --- DASHBOARD RENDERING INTERFACE ---
+# --- USER CONTROL DASHBOARD UI ---
 @app.get("/", response_class=HTMLResponse)
 def index_page():
     return """
@@ -249,23 +223,11 @@ def index_page():
         <style>
             body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #040406; overflow-x: hidden; position: relative; }
             .mono { font-family: 'Space Grotesk', sans-serif; }
-            .glass-panel { background: rgba(11, 12, 22, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.03); }
-            
-            #snow-canvas {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                z-index: 0;
-                pointer-events: none;
-            }
+            #snow-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
             #loginView, #appView { position: relative; z-index: 10; }
         </style>
     </head>
     <body class="text-slate-200 min-h-screen">
-
-        <!-- SNOWFALL BACKGROUND CANVAS LAYER -->
         <canvas id="snow-canvas"></canvas>
 
         <!-- LOGIN SCREEN -->
@@ -278,21 +240,21 @@ def index_page():
                 <div class="space-y-4">
                     <div>
                         <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-semibold">Admin Username</label>
-                        <input id="admUser" type="text" class="w-full bg-[#111222] border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-indigo-500 transition-all" placeholder="Username">
+                        <input id="admUser" type="text" class="w-full bg-[#111222] border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none">
                     </div>
                     <div>
                         <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1 font-semibold">Passphrase</label>
-                        <input id="admPass" type="password" class="w-full bg-[#111222] border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-indigo-500 transition-all" placeholder="••••••••">
+                        <input id="admPass" type="password" class="w-full bg-[#111222] border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none">
                     </div>
-                    <button onclick="attemptLogin()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-xl transition-all shadow-lg mt-2">
+                    <button onclick="attemptLogin()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-xl shadow-lg mt-2 transition-all">
                         Enter Workspace Terminal
                     </button>
-                    <p id="loginErr" class="text-xs text-rose-400 mt-2 hidden text-center mono">Invalid Administrative Credentials.</p>
+                    <p id="loginErr" class="text-xs text-rose-400 mt-2 hidden text-center mono">Invalid Credentials.</p>
                 </div>
             </div>
         </div>
 
-        <!-- APPLICATION CONTAINER -->
+        <!-- APP DASHBOARD -->
         <div id="appView" class="hidden min-h-screen flex flex-col">
             <header class="border-b border-slate-900 bg-[#07080f]/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
                 <div class="flex items-center gap-3">
@@ -300,76 +262,61 @@ def index_page():
                     <span class="font-bold tracking-tight text-lg text-white">SHAYAN_EXPLORER <span class="text-indigo-400 text-xs px-2 py-0.5 rounded border border-indigo-500/20 bg-indigo-500/5 ml-1">BY @VERNEXZZZ</span></span>
                 </div>
                 <div class="flex items-center gap-3">
-                    <a href="https://t.me/shayan_explorer_channel" target="_blank" class="text-xs font-bold text-indigo-400 hover:underline bg-indigo-500/5 border border-indigo-500/20 px-3 py-2 rounded-xl transition-all">
-                        📢 Official Channel Link
-                    </a>
-                    <button onclick="toggleEndpoints()" class="text-xs font-semibold px-4 py-2 bg-[#111322] border border-slate-800 hover:border-slate-700 rounded-xl transition-all">
-                        📋 Live Proxy Architecture URIs
-                    </button>
+                    <a href="https://t.me/shayan_explorer_channel" target="_blank" class="text-xs font-bold text-indigo-400 bg-indigo-500/5 border border-indigo-500/20 px-3 py-2 rounded-xl">📢 Official Channel Link</a>
+                    <button onclick="toggleEndpoints()" class="text-xs font-semibold px-4 py-2 bg-[#111322] border border-slate-800 rounded-xl">📋 Live Proxy URIs</button>
                 </div>
             </header>
 
-            <div id="endpointsDrawer" class="hidden bg-[#0a0b12]/90 border-b border-slate-900 p-6 backdrop-blur-md">
+            <div id="endpointsDrawer" class="hidden bg-[#0a0b12]/90 border-b border-slate-900 p-6">
                 <div class="max-w-7xl mx-auto">
-                    <h3 class="text-sm font-bold uppercase tracking-wider text-indigo-400 mb-3 mono">Production Target Proxy URLs (Click to Copy instantly)</h3>
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-indigo-400 mb-3 mono">Target API Direct Routes (Click to Copy)</h3>
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="rawUrlsList"></div>
                 </div>
             </div>
 
             <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Management Panel -->
                 <div class="lg:col-span-1 space-y-6">
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
-                        <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                            <span>🔑</span> Generate Dynamic Token
-                        </h2>
+                        <h2 class="text-lg font-bold text-white mb-4">🔑 Generate Dynamic Token</h2>
                         <div class="space-y-4">
                             <div>
-                                <label class="block text-xs uppercase text-slate-400 mb-1 font-semibold">User Label / Client Name</label>
-                                <input id="keyName" type="text" placeholder="e.g., Client User Token" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                                <label class="block text-xs uppercase text-slate-400 mb-1">User Label</label>
+                                <input id="keyName" type="text" placeholder="Client Name" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none">
                             </div>
                             <div>
-                                <label class="block text-xs uppercase text-slate-400 mb-1 font-semibold">Custom Passkey Core</label>
-                                <input id="keyString" type="text" placeholder="e.g., shayan-key-xxxx" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                                <label class="block text-xs uppercase text-slate-400 mb-1">Custom Passkey Core</label>
+                                <input id="keyString" type="text" placeholder="shayan-key-xxxx" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none">
                             </div>
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label class="block text-xs uppercase text-slate-400 mb-1 font-semibold">Limit Request</label>
-                                    <input id="keyLimit" type="number" value="500" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                                    <label class="block text-xs uppercase text-slate-400 mb-1">Limit Request</label>
+                                    <input id="keyLimit" type="number" value="500" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white">
                                 </div>
                                 <div>
-                                    <label class="block text-xs uppercase text-slate-400 mb-1 font-semibold">Expiration Date</label>
-                                    <input id="keyExpiry" type="date" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                                    <label class="block text-xs uppercase text-slate-400 mb-1">Expiration</label>
+                                    <input id="keyExpiry" type="date" class="w-full bg-[#121324] border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white">
                                 </div>
                             </div>
-                            
                             <div>
-                                <label class="block text-xs uppercase text-slate-400 mb-2 font-semibold">Module Endpoint Scope Rules</label>
+                                <label class="block text-xs uppercase text-slate-400 mb-2">Scope Mapping</label>
                                 <div class="flex gap-2 mb-3">
-                                    <button id="toolScopeAll" onclick="setScopeMode('all')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400">All Modules Enabled</button>
-                                    <button id="toolScopeSpec" onclick="setScopeMode('spec')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400">Isolate Specific Tools</button>
+                                    <button id="toolScopeAll" onclick="setScopeMode('all')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400">All Modules</button>
+                                    <button id="toolScopeSpec" onclick="setScopeMode('spec')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400">Custom Isolate</button>
                                 </div>
                                 <div id="specificToolsGrid" class="hidden grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 bg-[#0a0b12] rounded-xl border border-slate-900"></div>
                             </div>
-
-                            <button onclick="generateKey()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 px-4 rounded-xl text-sm transition-all shadow-lg mt-2">
-                                Provision Key Ruleset
-                            </button>
+                            <button onclick="generateKey()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 px-4 rounded-xl text-sm transition-all shadow-lg">Provision Key Ruleset</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Live Stream Display -->
                 <div class="lg:col-span-2 space-y-6">
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4">Live Cryptographic Allocation Mapping</h2>
                         <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="keysContainer"></div>
                     </div>
-
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
-                        <h2 class="text-lg font-bold text-white mb-4 flex items-center justify-between">
-                            <span>📡 Live Activity Lookup Telemetry</span>
-                        </h2>
+                        <h2 class="text-lg font-bold text-white mb-4">📡 Live Activity Lookup Telemetry</h2>
                         <div class="overflow-x-auto">
                             <table class="w-full text-left text-xs">
                                 <thead>
@@ -377,7 +324,7 @@ def index_page():
                                         <th class="py-2">Timestamp</th>
                                         <th class="py-2">Key Owner</th>
                                         <th class="py-2">Trigger Link</th>
-                                        <th class="py-2">Logged Query Input</th>
+                                        <th class="py-2">Logged Query</th>
                                     </tr>
                                 </thead>
                                 <tbody id="logsTableBody" class="divide-y divide-slate-900 text-slate-300 mono"></tbody>
@@ -391,35 +338,23 @@ def index_page():
         <script>
             let currentScopeMode = 'all';
             let globalToolsList = [];
-
             document.getElementById('keyExpiry').value = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
 
-            // --- SMOOTH SNOWFALL PERFORMANCE LAYER ---
+            // --- LAG-FREE SNOW ENGINE ---
             const canvas = document.getElementById('snow-canvas');
             const ctx = canvas.getContext('2d');
             let flakes = [];
-
-            function resizeCanvas() {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-            }
+            function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
             window.addEventListener('resize', resizeCanvas);
             resizeCanvas();
 
             function initSnow() {
                 flakes = [];
-                const maxFlakes = window.innerWidth < 768 ? 35 : 90; // Balanced density avoiding lag spikes
+                const maxFlakes = window.innerWidth < 768 ? 30 : 80;
                 for (let i = 0; i < maxFlakes; i++) {
-                    flakes.push({
-                        x: Math.random() * canvas.width,
-                        y: Math.random() * canvas.height,
-                        r: Math.random() * 2 + 1,
-                        d: Math.random() * maxFlakes,
-                        speed: Math.random() * 0.8 + 0.4
-                    });
+                    flakes.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, r: Math.random() * 2 + 1, speed: Math.random() * 0.8 + 0.4 });
                 }
             }
-
             function drawSnow() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'rgba(230, 242, 255, 0.4)';
@@ -430,146 +365,76 @@ def index_page():
                     ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2, true);
                 }
                 ctx.fill();
-                updateSnow();
-            }
-
-            function updateSnow() {
                 for (let i = 0; i < flakes.length; i++) {
-                    const f = flakes[i];
-                    f.y += f.speed;
-                    f.x += Math.sin(f.y / 25) * 0.4;
-
-                    if (f.y > canvas.height) {
-                        flakes[i] = { x: Math.random() * canvas.width, y: -10, r: f.r, d: f.d, speed: f.speed };
-                    }
+                    flakes[i].y += flakes[i].speed;
+                    flakes[i].x += Math.sin(flakes[i].y / 25) * 0.3;
+                    if (flakes[i].y > canvas.height) { flakes[i].y = -10; flakes[i].x = Math.random() * canvas.width; }
                 }
+                requestAnimationFrame(drawSnow);
             }
+            initSnow(); drawSnow();
 
-            function runSnowEngine() {
-                drawSnow();
-                requestAnimationFrame(runSnowEngine);
-            }
-            initSnow();
-            runSnowEngine();
-
-            // --- DASHBOARD API ACTIONS ---
+            // --- SUITE LOGIC ---
             async function attemptLogin() {
                 const username = document.getElementById('admUser').value;
                 const password = document.getElementById('admPass').value;
-                
-                const res = await fetch('/api/admin/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ username, password })
-                });
-
+                const res = await fetch('/api/admin/login', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ username, password }) });
                 if (res.ok) {
                     document.getElementById('loginView').classList.add('hidden');
                     document.getElementById('appView').classList.remove('hidden');
-                    refreshTelemetry();
-                    setInterval(refreshTelemetry, 3000); 
-                } else {
-                    document.getElementById('loginErr').classList.remove('hidden');
-                }
+                    refreshTelemetry(); setInterval(refreshTelemetry, 3000); 
+                } else { document.getElementById('loginErr').classList.remove('hidden'); }
             }
 
             function setScopeMode(mode) {
                 currentScopeMode = mode;
-                const allBtn = document.getElementById('toolScopeAll');
-                const specBtn = document.getElementById('toolScopeSpec');
-                const grid = document.getElementById('specificToolsGrid');
-
-                if(mode === 'all') {
-                    allBtn.className = "flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400";
-                    specBtn.className = "flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400";
-                    grid.classList.add('hidden');
-                } else {
-                    specBtn.className = "flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400";
-                    allBtn.className = "flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400";
-                    grid.classList.remove('hidden');
-                }
+                document.getElementById('specificToolsGrid').classList.toggle('hidden', mode === 'all');
+                document.getElementById('toolScopeAll').className = mode === 'all' ? "flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400" : "flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400";
+                document.getElementById('toolScopeSpec').className = mode === 'spec' ? "flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400" : "flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400";
             }
-
-            function toggleEndpoints() {
-                document.getElementById('endpointsDrawer').classList.toggle('hidden');
-            }
-
-            function copyToClipboard(text) {
-                navigator.clipboard.writeText(text);
-                alert("Copied Endpoint URL Path Route Blueprint.");
-            }
+            function toggleEndpoints() { document.getElementById('endpointsDrawer').classList.toggle('hidden'); }
+            function copyToClipboard(text) { navigator.clipboard.writeText(text); alert("Route Path Blueprint Copied."); }
 
             async function refreshTelemetry() {
                 const res = await fetch('/api/admin/data');
                 const data = await res.json();
-                globalToolsList = data.tools;
                 
                 const grid = document.getElementById('specificToolsGrid');
                 if(!grid.children.length) {
-                    grid.innerHTML = data.tools.map(t => `
-                        <label class="flex items-center gap-2 p-1.5 rounded border border-slate-900 bg-[#070810] text-[11px] text-slate-300 cursor-pointer hover:border-slate-800">
-                            <input type="checkbox" value="${t.id}" class="accent-indigo-500">
-                            <span class="truncate">${t.name}</span>
-                        </label>
-                    `).join('');
+                    grid.innerHTML = data.tools.map(t => `<label class="flex items-center gap-2 p-1.5 rounded bg-[#070810] text-[11px] text-slate-300 cursor-pointer border border-slate-900"><input type="checkbox" value="${t.id}" class="accent-indigo-500"><span class="truncate">${t.name}</span></label>`).join('');
                 }
 
-                const rawList = document.getElementById('rawUrlsList');
-                const hostUrl = window.location.origin;
-                rawList.innerHTML = data.tools.map(t => `
-                    <div onclick="copyToClipboard('${hostUrl}/gateway/${t.id}?key=YOUR_KEY&${t.param}=')" class="p-2.5 bg-[#07080f] border border-slate-800 hover:border-indigo-500/50 rounded-xl cursor-pointer text-xs truncate transition-all font-mono">
-                        <span class="text-indigo-400 font-bold">[${t.id.toUpperCase()}]</span><br>
-                        <span class="text-slate-400">${hostUrl}/gateway/${t.id}</span>
+                document.getElementById('rawUrlsList').innerHTML = data.tools.map(t => `
+                    <div onclick="copyToClipboard('${window.location.origin}/gateway/${t.id}?key=YOUR_KEY&${t.param}=')" class="p-2.5 bg-[#07080f] border border-slate-800 rounded-xl cursor-pointer text-xs font-mono truncate transition-all hover:border-indigo-500/50">
+                        <span class="text-indigo-400 font-bold">[${t.id.toUpperCase()}]</span><br>${window.location.origin}/gateway/${t.id}
                     </div>
                 `).join('');
 
-                const keysContainer = document.getElementById('keysContainer');
-                if(data.keys.length === 0) {
-                    keysContainer.innerHTML = `<p class="text-xs text-slate-500 py-4 text-center mono">No configured verification keys available.</p>`;
-                } else {
-                    keysContainer.innerHTML = data.keys.map(k => {
-                        const statusColor = k.status === 'active' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 'text-rose-400 border-rose-500/20 bg-rose-500/5';
-                        return `
-                        <div class="p-4 bg-[#0a0b14] border border-slate-900 rounded-xl space-y-3">
-                            <div class="flex items-start justify-between">
-                                <div>
-                                    <h4 class="font-bold text-sm text-white">${k.name}</h4>
-                                    <p class="text-xs font-mono text-indigo-300 select-all bg-[#111222] px-2 py-0.5 rounded border border-slate-800 inline-block mt-1">${k.key}</p>
-                                </div>
-                                <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${statusColor}">${k.status}</span>
+                document.getElementById('keysContainer').innerHTML = data.keys.length === 0 ? `<p class="text-xs text-slate-500 py-4 text-center mono">No active token signatures found.</p>` : data.keys.map(k => `
+                    <div class="p-4 bg-[#0a0b14] border border-slate-900 rounded-xl space-y-3">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h4 class="font-bold text-sm text-white">${k.name}</h4>
+                                <p class="text-xs font-mono text-indigo-300 bg-[#111222] px-2 py-0.5 rounded border border-slate-800 inline-block mt-1 select-all">${k.key}</p>
                             </div>
-                            <div class="grid grid-cols-3 gap-2 text-[11px] text-slate-400 mono">
-                                <div>Hits: <span class="text-white font-bold">${k.uses} / ${k.limit}</span></div>
-                                <div>Exp: <span class="text-white font-bold">${k.expiry}</span></div>
-                                <span class="truncate">Scope: ${k.tools.join(', ')}</span>
-                            </div>
-                            <div class="flex flex-wrap gap-1.5 pt-1 border-t border-slate-900/40">
-                                <button onclick="keyAction('${k.key}', 'restart_limit')" class="text-[10px] bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-slate-800">Reset Hits</button>
-                                ${k.status === 'active' ? 
-                                    `<button onclick="keyAction('${k.key}', 'suspend')" class="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2 py-1 rounded hover:bg-amber-500/20">Suspend</button>` :
-                                    `<button onclick="keyAction('${k.key}', 'activate')" class="text-[10px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-1 rounded hover:bg-emerald-500/20">Activate</button>`
-                                }
-                                <button onclick="promptEdit('${k.key}', ${k.limit}, '${k.expiry}')" class="text-[10px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-2 py-1 rounded hover:bg-indigo-500/20">Edit Parameters</button>
-                                <button onclick="keyAction('${k.key}', 'delete')" class="text-[10px] bg-rose-500/10 border border-rose-500/20 text-rose-400 px-2 py-1 rounded hover:bg-rose-500/20 ml-auto">Delete</button>
-                            </div>
+                            <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${k.status==='active'?'text-emerald-400 border-emerald-500/20 bg-emerald-500/5':'text-rose-400 border-rose-500/20 bg-rose-500/5'}">${k.status}</span>
                         </div>
-                        `;
-                    }).join('');
-                }
+                        <div class="grid grid-cols-3 gap-2 text-[11px] text-slate-400 mono">
+                            <div>Hits: <span class="text-white font-bold">${k.uses}/${k.limit}</span></div>
+                            <div>Exp: <span class="text-white font-bold">${k.expiry}</span></div>
+                            <span class="truncate">Scope: ${k.tools.join(', ')}</span>
+                        </div>
+                        <div class="flex gap-1.5 pt-1 border-t border-slate-900/40 text-[10px]">
+                            <button onclick="keyAction('${k.key}', 'restart_limit')" class="bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded">Reset</button>
+                            <button onclick="keyAction('${k.key}', '${k.status==='active'?'suspend':'activate'}')" class="bg-indigo-500/10 text-indigo-400 px-2 py-1 rounded">${k.status==='active'?'Suspend':'Activate'}</button>
+                            <button onclick="keyAction('${k.key}', 'delete')" class="bg-rose-500/10 text-rose-400 px-2 py-1 rounded ml-auto">Delete</button>
+                        </div>
+                    </div>
+                `).join('');
 
-                const logsBody = document.getElementById('logsTableBody');
-                if(data.logs.length === 0) {
-                    logsBody.innerHTML = `<tr><td colspan="4" class="py-4 text-center text-slate-600">Awaiting stream telemetry requests...</td></tr>`;
-                } else {
-                    logsBody.innerHTML = data.logs.reverse().map(l => `
-                        <tr>
-                            <td class="py-2 text-slate-500">${l.timestamp}</td>
-                            <td class="py-2 text-slate-300 font-semibold">${l.key_name}</td>
-                            <td class="py-2 text-indigo-400 font-bold">[${l.tool.toUpperCase()}]</td>
-                            <td class="py-2 text-slate-400">${l.query}</td>
-                        </tr>
-                    `).join('');
-                }
+                document.getElementById('logsTableBody').innerHTML = data.logs.length === 0 ? `<tr><td colspan="4" class="py-4 text-center text-slate-600">Awaiting stream telemetry requests...</td></tr>` : data.logs.reverse().map(l => `
+                    <tr><td class="py-2 text-slate-500">${l.timestamp}</td><td class="py-2 text-slate-300 font-semibold">${l.key_name}</td><td class="py-2 text-indigo-400 font-bold">[${l.tool.toUpperCase()}]</td><td class="py-2 text-slate-400">${l.query}</td></tr>
+                `).join('');
             }
 
             async function generateKey() {
@@ -577,52 +442,22 @@ def index_page():
                 const custom_key = document.getElementById('keyString').value;
                 const daily_limit = parseInt(document.getElementById('keyLimit').value);
                 const expiry_date = document.getElementById('keyExpiry').value;
-
-                if(!key_name || !custom_key) return alert("All fields required.");
+                if(!key_name || !custom_key) return alert("Fill fields.");
 
                 let allowed_tools = ['all'];
                 if(currentScopeMode === 'spec') {
-                    const checked = Array.from(document.querySelectorAll('#specificToolsGrid input:checked')).map(el => el.value);
-                    if(checked.length === 0) return alert("Please map specific pipelines.");
-                    allowed_tools = checked;
+                    allowed_tools = Array.from(document.querySelectorAll('#specificToolsGrid input:checked')).map(el => el.value);
+                    if(allowed_tools.length === 0) return alert("Select tools.");
                 }
 
-                const res = await fetch('/api/admin/keys', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ key_name, custom_key, daily_limit, expiry_date, allowed_tools })
-                });
-
-                if(res.ok) {
-                    document.getElementById('keyName').value = '';
-                    document.getElementById('keyString').value = '';
-                    refreshTelemetry();
-                } else {
-                    const err = await res.json();
-                    alert(err.detail || "Key collision structural error.");
-                }
+                const res = await fetch('/api/admin/keys', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key_name, custom_key, daily_limit, expiry_date, allowed_tools }) });
+                if(res.ok) { document.getElementById('keyName').value = ''; document.getElementById('keyString').value = ''; refreshTelemetry(); }
+                else { alert("Key collision error."); }
             }
 
             async function keyAction(keyId, actionType) {
-                await fetch(`/api/admin/keys/${keyId}/action`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ type: actionType })
-                });
+                await fetch(`/api/admin/keys/${keyId}/action`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ type: actionType }) });
                 refreshTelemetry();
-            }
-
-            function promptEdit(keyId, oldLimit, oldExpiry) {
-                const newLimit = prompt("New Request Threshold Limit Max count:", oldLimit);
-                if (newLimit === null) return;
-                const newExpiry = prompt("New expiry deadline date (YYYY-MM-DD):", oldExpiry);
-                if (newExpiry === null) return;
-
-                fetch(`/api/admin/keys/${keyId}/action`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ type: 'edit', limit: parseInt(newLimit), expiry: newExpiry })
-                }).then(() => refreshTelemetry());
             }
         </script>
     </body>
