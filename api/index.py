@@ -13,10 +13,9 @@ app = FastAPI(title="SHAYAN_EXPLORER API Gateway")
 ADMIN_USER = "vernex"
 ADMIN_PASS = "vernex@16vx"
 BASE_TARGET_URL = "https://ft-osint-api.duckdns.org/api"
-DEFAULT_UPSTREAM_KEY = "vx-osint"
+DEFAULT_UPSTREAM_KEY = "vernex-6a9dc4fdd5923c40b0aba27bf1e39e3f"
 
 # --- PASTE YOUR UPSTASH REDIS DETAILS HERE ---
-# This ensures your keys never delete themselves when Vercel restarts!
 UPSTASH_URL = os.getenv("UPSTASH_REDIS_REST_URL", "REPLACE_WITH_YOUR_UPSTASH_REST_URL")
 UPSTASH_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "REPLACE_WITH_YOUR_UPSTASH_REST_TOKEN")
 
@@ -27,19 +26,25 @@ def db_get(key: str, default):
     try:
         with httpx.Client() as client:
             res = client.post(f"{UPSTASH_URL}/get/{key}", headers=HEADERS)
-            data = res.json().get("result")
-            return json.loads(data) if data else default
+            if res.status_code == 200:
+                data = res.json().get("result")
+                if data:
+                    return json.loads(data)
+            return default
     except Exception as e:
-        print(f"Cloud DB Read Error: {e}")
+        print(f"Cloud DB Read Error for {key}: {e}")
         return default
 
 def db_set(key: str, value):
     """Commit configuration states safely into permanent cloud database clusters."""
     try:
         with httpx.Client() as client:
-            client.post(f"{UPSTASH_URL}/set/{key}", content=json.dumps(value), headers=HEADERS)
+            payload = json.dumps(value)
+            res = client.post(f"{UPSTASH_URL}/set/{key}", content=json.dumps(payload), headers=HEADERS)
+            return res.status_code == 200
     except Exception as e:
-        print(f"Cloud DB Write Error: {e}")
+        print(f"Cloud DB Write Error for {key}: {e}")
+        return False
 
 # Expanded Tools Blueprint Catalog
 TOOLS_LIST = [
@@ -115,7 +120,6 @@ async def gateway_router(tool_id: str, request: Request):
     tool_config = next((t for t in TOOLS_LIST if t["id"] == tool_id), None)
     search_query = query_params.get(tool_config["param"], "N/A") if tool_config else "N/A"
 
-    # Log updating process
     search_logs = db_get("search_logs", [])
     search_logs.append({
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -124,7 +128,7 @@ async def gateway_router(tool_id: str, request: Request):
         "tool": tool_id,
         "query": search_query
     })
-    db_set("search_logs", search_logs[-100:]) # keep last 100 entries
+    db_set("search_logs", search_logs[-100:])
     
     key_data["uses"] += 1
     db_set("api_keys", api_keys_db)
@@ -183,7 +187,11 @@ def create_key(data: KeyGenRequest):
         "tools": data.allowed_tools,
         "status": "active"
     }
-    db_set("api_keys", api_keys_db)
+    
+    success = db_set("api_keys", api_keys_db)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save key into Upstash")
+        
     return {"status": "created"}
 
 @app.post("/api/admin/keys/{key_id}/action")
@@ -382,7 +390,7 @@ def index_page():
                 if (res.ok) {
                     document.getElementById('loginView').classList.add('hidden');
                     document.getElementById('appView').classList.remove('hidden');
-                    refreshTelemetry(); setInterval(refreshTelemetry, 3000); 
+                    refreshTelemetry(); setInterval(refreshTelemetry, 2500); 
                 } else { document.getElementById('loginErr').classList.remove('hidden'); }
             }
 
@@ -396,45 +404,50 @@ def index_page():
             function copyToClipboard(text) { navigator.clipboard.writeText(text); alert("Route Path Blueprint Copied."); }
 
             async function refreshTelemetry() {
-                const res = await fetch('/api/admin/data');
-                const data = await res.json();
-                
-                const grid = document.getElementById('specificToolsGrid');
-                if(!grid.children.length) {
-                    grid.innerHTML = data.tools.map(t => `<label class="flex items-center gap-2 p-1.5 rounded bg-[#070810] text-[11px] text-slate-300 cursor-pointer border border-slate-900"><input type="checkbox" value="${t.id}" class="accent-indigo-500"><span class="truncate">${t.name}</span></label>`).join('');
-                }
+                try {
+                    const res = await fetch('/api/admin/data');
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    
+                    const grid = document.getElementById('specificToolsGrid');
+                    if(grid && !grid.children.length) {
+                        grid.innerHTML = data.tools.map(t => `<label class="flex items-center gap-2 p-1.5 rounded bg-[#070810] text-[11px] text-slate-300 cursor-pointer border border-slate-900"><input type="checkbox" value="${t.id}" class="accent-indigo-500"><span class="truncate">${t.name}</span></label>`).join('');
+                    }
 
-                document.getElementById('rawUrlsList').innerHTML = data.tools.map(t => `
-                    <div onclick="copyToClipboard('${window.location.origin}/gateway/${t.id}?key=YOUR_KEY&${t.param}=')" class="p-2.5 bg-[#07080f] border border-slate-800 rounded-xl cursor-pointer text-xs font-mono truncate transition-all hover:border-indigo-500/50">
-                        <span class="text-indigo-400 font-bold">[${t.id.toUpperCase()}]</span><br>${window.location.origin}/gateway/${t.id}
-                    </div>
-                `).join('');
+                    document.getElementById('rawUrlsList').innerHTML = data.tools.map(t => `
+                        <div onclick="copyToClipboard('${window.location.origin}/gateway/${t.id}?key=YOUR_KEY&${t.param}=')" class="p-2.5 bg-[#07080f] border border-slate-800 rounded-xl cursor-pointer text-xs font-mono truncate transition-all hover:border-indigo-500/50">
+                            <span class="text-indigo-400 font-bold">[${t.id.toUpperCase()}]</span><br>${window.location.origin}/gateway/${t.id}
+                        </div>
+                    `).join('');
 
-                document.getElementById('keysContainer').innerHTML = data.keys.length === 0 ? `<p class="text-xs text-slate-500 py-4 text-center mono">No active token signatures found.</p>` : data.keys.map(k => `
-                    <div class="p-4 bg-[#0a0b14] border border-slate-900 rounded-xl space-y-3">
-                        <div class="flex justify-between items-start">
-                            <div>
-                                <h4 class="font-bold text-sm text-white">${k.name}</h4>
-                                <p class="text-xs font-mono text-indigo-300 bg-[#111222] px-2 py-0.5 rounded border border-slate-800 inline-block mt-1 select-all">${k.key}</p>
+                    document.getElementById('keysContainer').innerHTML = (!data.keys || data.keys.length === 0) ? `<p class="text-xs text-slate-500 py-4 text-center mono">No active token signatures found.</p>` : data.keys.map(k => `
+                        <div class="p-4 bg-[#0a0b14] border border-slate-900 rounded-xl space-y-3">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h4 class="font-bold text-sm text-white">${k.name}</h4>
+                                    <p class="text-xs font-mono text-indigo-300 bg-[#111222] px-2 py-0.5 rounded border border-slate-800 inline-block mt-1 select-all">${k.key}</p>
+                                </div>
+                                <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${k.status==='active'?'text-emerald-400 border-emerald-500/20 bg-emerald-500/5':'text-rose-400 border-rose-500/20 bg-rose-500/5'}">${k.status}</span>
                             </div>
-                            <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${k.status==='active'?'text-emerald-400 border-emerald-500/20 bg-emerald-500/5':'text-rose-400 border-rose-500/20 bg-rose-500/5'}">${k.status}</span>
+                            <div class="grid grid-cols-3 gap-2 text-[11px] text-slate-400 mono">
+                                <div>Hits: <span class="text-white font-bold">${k.uses}/${k.limit}</span></div>
+                                <div>Exp: <span class="text-white font-bold">${k.expiry}</span></div>
+                                <span class="truncate">Scope: ${Array.isArray(k.tools) ? k.tools.join(', ') : k.tools}</span>
+                            </div>
+                            <div class="flex gap-1.5 pt-1 border-t border-slate-900/40 text-[10px]">
+                                <button onclick="keyAction('${k.key}', 'restart_limit')" class="bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded">Reset</button>
+                                <button onclick="keyAction('${k.key}', '${k.status==='active'?'suspend':'activate'}')" class="bg-indigo-500/10 text-indigo-400 px-2 py-1 rounded">${k.status==='active'?'Suspend':'Activate'}</button>
+                                <button onclick="keyAction('${k.key}', 'delete')" class="bg-rose-500/10 text-rose-400 px-2 py-1 rounded ml-auto">Delete</button>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-3 gap-2 text-[11px] text-slate-400 mono">
-                            <div>Hits: <span class="text-white font-bold">${k.uses}/${k.limit}</span></div>
-                            <div>Exp: <span class="text-white font-bold">${k.expiry}</span></div>
-                            <span class="truncate">Scope: ${k.tools.join(', ')}</span>
-                        </div>
-                        <div class="flex gap-1.5 pt-1 border-t border-slate-900/40 text-[10px]">
-                            <button onclick="keyAction('${k.key}', 'restart_limit')" class="bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded">Reset</button>
-                            <button onclick="keyAction('${k.key}', '${k.status==='active'?'suspend':'activate'}')" class="bg-indigo-500/10 text-indigo-400 px-2 py-1 rounded">${k.status==='active'?'Suspend':'Activate'}</button>
-                            <button onclick="keyAction('${k.key}', 'delete')" class="bg-rose-500/10 text-rose-400 px-2 py-1 rounded ml-auto">Delete</button>
-                        </div>
-                    </div>
-                `).join('');
+                    `).join('');
 
-                document.getElementById('logsTableBody').innerHTML = data.logs.length === 0 ? `<tr><td colspan="4" class="py-4 text-center text-slate-600">Awaiting stream telemetry requests...</td></tr>` : data.logs.reverse().map(l => `
-                    <tr><td class="py-2 text-slate-500">${l.timestamp}</td><td class="py-2 text-slate-300 font-semibold">${l.key_name}</td><td class="py-2 text-indigo-400 font-bold">[${l.tool.toUpperCase()}]</td><td class="py-2 text-slate-400">${l.query}</td></tr>
-                `).join('');
+                    document.getElementById('logsTableBody').innerHTML = (!data.logs || data.logs.length === 0) ? `<tr><td colspan="4" class="py-4 text-center text-slate-600">Awaiting stream telemetry requests...</td></tr>` : data.logs.slice().reverse().map(l => `
+                        <tr><td class="py-2 text-slate-500">${l.timestamp}</td><td class="py-2 text-slate-300 font-semibold">${l.key_name}</td><td class="py-2 text-indigo-400 font-bold">[${l.tool.toUpperCase()}]</td><td class="py-2 text-slate-400">${l.query}</td></tr>
+                    `).join('');
+                } catch (e) {
+                    console.error("Telemetry Error: ", e);
+                }
             }
 
             async function generateKey() {
@@ -442,17 +455,29 @@ def index_page():
                 const custom_key = document.getElementById('keyString').value;
                 const daily_limit = parseInt(document.getElementById('keyLimit').value);
                 const expiry_date = document.getElementById('keyExpiry').value;
-                if(!key_name || !custom_key) return alert("Fill fields.");
+                if(!key_name || !custom_key) return alert("Please fill all fields.");
 
                 let allowed_tools = ['all'];
                 if(currentScopeMode === 'spec') {
                     allowed_tools = Array.from(document.querySelectorAll('#specificToolsGrid input:checked')).map(el => el.value);
-                    if(allowed_tools.length === 0) return alert("Select tools.");
+                    if(allowed_tools.length === 0) return alert("Select at least one tool.");
                 }
 
-                const res = await fetch('/api/admin/keys', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key_name, custom_key, daily_limit, expiry_date, allowed_tools }) });
-                if(res.ok) { document.getElementById('keyName').value = ''; document.getElementById('keyString').value = ''; refreshTelemetry(); }
-                else { alert("Key collision error."); }
+                const res = await fetch('/api/admin/keys', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({ key_name, custom_key, daily_limit, expiry_date, allowed_tools }) 
+                });
+                
+                if(res.ok) { 
+                    document.getElementById('keyName').value = ''; 
+                    document.getElementById('keyString').value = ''; 
+                    // Instantly trigger UI render update
+                    setTimeout(refreshTelemetry, 400); 
+                } else { 
+                    const errData = await res.json();
+                    alert("Error creating key: " + (errData.detail || "Collision or cloud DB error.")); 
+                }
             }
 
             async function keyAction(keyId, actionType) {
