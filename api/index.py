@@ -1,3 +1,5 @@
+import os
+import json
 import datetime
 import httpx
 from typing import Dict, List, Optional
@@ -14,11 +16,50 @@ ADMIN_PASS = "vernex@16vx"
 BASE_TARGET_URL = "https://ft-osint-api.duckdns.org/api"
 DEFAULT_UPSTREAM_KEY = "vx-osint"
 
-# In-Memory Database State
-# NOTE: Because serverless environments prune memory states, keep this tab active.
-# For permanent multi-day storage, bind a Vercel KV / Redis instance here.
+# Persistent Storage Paths (Fallback for local disk environments)
+DB_FILE_PATH = "/tmp/api_keys_db.json"
+LOGS_FILE_PATH = "/tmp/search_logs.json"
+
+# Global In-Memory Fallbacks
 api_keys_db: Dict[str, dict] = {}
 search_logs: List[dict] = []
+
+def load_persistent_data():
+    """Loads database keys and telemetry logs from the local cache system."""
+    global api_keys_db, search_logs
+    # Load Keys
+    if os.path.exists(DB_FILE_PATH):
+        try:
+            with open(DB_FILE_PATH, 'r') as f:
+                api_keys_db = json.load(f)
+        except Exception:
+            api_keys_db = {}
+    else:
+        api_keys_db = {}
+
+    # Load Logs
+    if os.path.exists(LOGS_FILE_PATH):
+        try:
+            with open(LOGS_FILE_PATH, 'r') as f:
+                search_logs = json.load(f)
+        except Exception:
+            search_logs = []
+    else:
+        search_logs = []
+
+def save_persistent_data():
+    """Saves current state rules safely to storage."""
+    global api_keys_db, search_logs
+    try:
+        with open(DB_FILE_PATH, 'w') as f:
+            json.dump(api_keys_db, f)
+        with open(LOGS_FILE_PATH, 'w') as f:
+            json.dump(search_logs, f)
+    except Exception as e:
+        print(f"Storage Sync Error: {str(e)}")
+
+# Perform Initial Startup Sync Load
+load_persistent_data()
 
 # Expanded Tools Blueprint Catalog
 TOOLS_LIST = [
@@ -66,6 +107,7 @@ class KeyGenRequest(BaseModel):
 # --- REVERSE PROXY GATEWAY ROUTE ---
 @app.get("/gateway/{tool_id}")
 async def gateway_router(tool_id: str, request: Request):
+    load_persistent_data()  # Pull latest key updates
     query_params = dict(request.query_params)
     user_key = query_params.get("key")
     
@@ -104,6 +146,7 @@ async def gateway_router(tool_id: str, request: Request):
     })
     
     key_data["uses"] += 1
+    save_persistent_data()  # Commit structural tracking count changes
     
     if not tool_config:
         raise HTTPException(status_code=404, detail="Tool Endpoint Not Found")
@@ -144,6 +187,7 @@ def admin_login(data: LoginRequest):
 
 @app.get("/api/admin/data")
 def get_admin_data():
+    load_persistent_data()
     return {
         "keys": list(api_keys_db.values()),
         "logs": search_logs[-100:],
@@ -152,6 +196,7 @@ def get_admin_data():
 
 @app.post("/api/admin/keys")
 def create_key(data: KeyGenRequest):
+    load_persistent_data()
     if data.custom_key in api_keys_db:
         raise HTTPException(status_code=400, detail="Key already exists")
     
@@ -164,10 +209,12 @@ def create_key(data: KeyGenRequest):
         "tools": data.allowed_tools,
         "status": "active"
     }
+    save_persistent_data()
     return {"status": "created"}
 
 @app.post("/api/admin/keys/{key_id}/action")
 def modify_key(key_id: str, action: dict):
+    load_persistent_data()
     if key_id not in api_keys_db:
         raise HTTPException(status_code=404, detail="Key not found")
     
@@ -183,6 +230,8 @@ def modify_key(key_id: str, action: dict):
     elif act_type == "edit":
         api_keys_db[key_id]["limit"] = action.get("limit")
         api_keys_db[key_id]["expiry"] = action.get("expiry")
+        
+    save_persistent_data()
     return {"status": "updated"}
 
 # --- DASHBOARD RENDERING INTERFACE ---
@@ -202,7 +251,6 @@ def index_page():
             .mono { font-family: 'Space Grotesk', sans-serif; }
             .glass-panel { background: rgba(11, 12, 22, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.03); }
             
-            /* Snowfall Canvas container styling */
             #snow-canvas {
                 position: fixed;
                 top: 0;
@@ -212,14 +260,12 @@ def index_page():
                 z-index: 0;
                 pointer-events: none;
             }
-            
-            /* Ensure interactive views stack clearly above snowfall matrix layer */
             #loginView, #appView { position: relative; z-index: 10; }
         </style>
     </head>
     <body class="text-slate-200 min-h-screen">
 
-        <!-- SNOWFALL ANIMATION CANVAS -->
+        <!-- SNOWFALL BACKGROUND CANVAS LAYER -->
         <canvas id="snow-canvas"></canvas>
 
         <!-- LOGIN SCREEN -->
@@ -271,7 +317,7 @@ def index_page():
             </div>
 
             <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Management Engine Panel -->
+                <!-- Management Panel -->
                 <div class="lg:col-span-1 space-y-6">
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
@@ -303,9 +349,7 @@ def index_page():
                                     <button id="toolScopeAll" onclick="setScopeMode('all')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-indigo-500 bg-indigo-500/10 text-indigo-400">All Modules Enabled</button>
                                     <button id="toolScopeSpec" onclick="setScopeMode('spec')" class="flex-1 py-1.5 rounded-lg text-xs font-bold border border-slate-800 bg-[#121324] text-slate-400">Isolate Specific Tools</button>
                                 </div>
-                                <div id="specificToolsGrid" class="hidden grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 bg-[#0a0b12] rounded-xl border border-slate-900">
-                                    <!-- Dynamic checkboxes drop here -->
-                                </div>
+                                <div id="specificToolsGrid" class="hidden grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 bg-[#0a0b12] rounded-xl border border-slate-900"></div>
                             </div>
 
                             <button onclick="generateKey()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 px-4 rounded-xl text-sm transition-all shadow-lg mt-2">
@@ -315,13 +359,11 @@ def index_page():
                     </div>
                 </div>
 
-                <!-- Live Stream Panel -->
+                <!-- Live Stream Display -->
                 <div class="lg:col-span-2 space-y-6">
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
                         <h2 class="text-lg font-bold text-white mb-4">Live Cryptographic Allocation Mapping</h2>
-                        <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="keysContainer">
-                            <!-- Populated allocations inside loop -->
-                        </div>
+                        <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="keysContainer"></div>
                     </div>
 
                     <div class="bg-[#080911]/80 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
@@ -338,9 +380,7 @@ def index_page():
                                         <th class="py-2">Logged Query Input</th>
                                     </tr>
                                 </thead>
-                                <tbody id="logsTableBody" class="divide-y divide-slate-900 text-slate-300 mono">
-                                    <!-- Sync records streams -->
-                                </tbody>
+                                <tbody id="logsTableBody" class="divide-y divide-slate-900 text-slate-300 mono"></tbody>
                             </table>
                         </div>
                     </div>
@@ -354,7 +394,7 @@ def index_page():
 
             document.getElementById('keyExpiry').value = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
 
-            // --- NATIVE LIGHTWEIGHT SNOWFALL ENGINE ---
+            // --- SMOOTH SNOWFALL PERFORMANCE LAYER ---
             const canvas = document.getElementById('snow-canvas');
             const ctx = canvas.getContext('2d');
             let flakes = [];
@@ -368,21 +408,21 @@ def index_page():
 
             function initSnow() {
                 flakes = [];
-                const maxFlakes = window.innerWidth < 768 ? 40 : 100; // Limit snowflakes on mobile for no lag
+                const maxFlakes = window.innerWidth < 768 ? 35 : 90; // Balanced density avoiding lag spikes
                 for (let i = 0; i < maxFlakes; i++) {
                     flakes.push({
                         x: Math.random() * canvas.width,
                         y: Math.random() * canvas.height,
-                        r: Math.random() * 2 + 1, // flake radius
-                        d: Math.random() * maxFlakes, // density
-                        speed: Math.random() * 1 + 0.5
+                        r: Math.random() * 2 + 1,
+                        d: Math.random() * maxFlakes,
+                        speed: Math.random() * 0.8 + 0.4
                     });
                 }
             }
 
             function drawSnow() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+                ctx.fillStyle = 'rgba(230, 242, 255, 0.4)';
                 ctx.beginPath();
                 for (let i = 0; i < flakes.length; i++) {
                     const f = flakes[i];
@@ -397,7 +437,7 @@ def index_page():
                 for (let i = 0; i < flakes.length; i++) {
                     const f = flakes[i];
                     f.y += f.speed;
-                    f.x += Math.sin(f.y / 30) * 0.5; // subtle sway
+                    f.x += Math.sin(f.y / 25) * 0.4;
 
                     if (f.y > canvas.height) {
                         flakes[i] = { x: Math.random() * canvas.width, y: -10, r: f.r, d: f.d, speed: f.speed };
@@ -411,8 +451,8 @@ def index_page():
             }
             initSnow();
             runSnowEngine();
-            // ------------------------------------------
 
+            // --- DASHBOARD API ACTIONS ---
             async function attemptLogin() {
                 const username = document.getElementById('admUser').value;
                 const password = document.getElementById('admPass').value;
@@ -427,7 +467,7 @@ def index_page():
                     document.getElementById('loginView').classList.add('hidden');
                     document.getElementById('appView').classList.remove('hidden');
                     refreshTelemetry();
-                    setInterval(refreshTelemetry, 3500); 
+                    setInterval(refreshTelemetry, 3000); 
                 } else {
                     document.getElementById('loginErr').classList.remove('hidden');
                 }
@@ -456,7 +496,7 @@ def index_page():
 
             function copyToClipboard(text) {
                 navigator.clipboard.writeText(text);
-                alert("Copied Target Proxy Route Path.");
+                alert("Copied Endpoint URL Path Route Blueprint.");
             }
 
             async function refreshTelemetry() {
@@ -485,7 +525,7 @@ def index_page():
 
                 const keysContainer = document.getElementById('keysContainer');
                 if(data.keys.length === 0) {
-                    keysContainer.innerHTML = `<p class="text-xs text-slate-500 py-4 text-center mono">No configured validation signatures found.</p>`;
+                    keysContainer.innerHTML = `<p class="text-xs text-slate-500 py-4 text-center mono">No configured verification keys available.</p>`;
                 } else {
                     keysContainer.innerHTML = data.keys.map(k => {
                         const statusColor = k.status === 'active' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 'text-rose-400 border-rose-500/20 bg-rose-500/5';
@@ -499,12 +539,12 @@ def index_page():
                                 <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${statusColor}">${k.status}</span>
                             </div>
                             <div class="grid grid-cols-3 gap-2 text-[11px] text-slate-400 mono">
-                                <div>Counter: <span class="text-white font-bold">${k.uses} / ${k.limit}</span></div>
-                                <div>Expires: <span class="text-white font-bold">${k.expiry}</span></div>
+                                <div>Hits: <span class="text-white font-bold">${k.uses} / ${k.limit}</span></div>
+                                <div>Exp: <span class="text-white font-bold">${k.expiry}</span></div>
                                 <span class="truncate">Scope: ${k.tools.join(', ')}</span>
                             </div>
                             <div class="flex flex-wrap gap-1.5 pt-1 border-t border-slate-900/40">
-                                <button onclick="keyAction('${k.key}', 'restart_limit')" class="text-[10px] bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-slate-800">Reset Count</button>
+                                <button onclick="keyAction('${k.key}', 'restart_limit')" class="text-[10px] bg-slate-900 border border-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-slate-800">Reset Hits</button>
                                 ${k.status === 'active' ? 
                                     `<button onclick="keyAction('${k.key}', 'suspend')" class="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2 py-1 rounded hover:bg-amber-500/20">Suspend</button>` :
                                     `<button onclick="keyAction('${k.key}', 'activate')" class="text-[10px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-1 rounded hover:bg-emerald-500/20">Activate</button>`
@@ -519,7 +559,7 @@ def index_page():
 
                 const logsBody = document.getElementById('logsTableBody');
                 if(data.logs.length === 0) {
-                    logsBody.innerHTML = `<tr><td colspan="4" class="py-4 text-center text-slate-600">Waiting for requests...</td></tr>`;
+                    logsBody.innerHTML = `<tr><td colspan="4" class="py-4 text-center text-slate-600">Awaiting stream telemetry requests...</td></tr>`;
                 } else {
                     logsBody.innerHTML = data.logs.reverse().map(l => `
                         <tr>
@@ -538,12 +578,12 @@ def index_page():
                 const daily_limit = parseInt(document.getElementById('keyLimit').value);
                 const expiry_date = document.getElementById('keyExpiry').value;
 
-                if(!key_name || !custom_key) return alert("Fill in token settings.");
+                if(!key_name || !custom_key) return alert("All fields required.");
 
                 let allowed_tools = ['all'];
                 if(currentScopeMode === 'spec') {
                     const checked = Array.from(document.querySelectorAll('#specificToolsGrid input:checked')).map(el => el.value);
-                    if(checked.length === 0) return alert("Select at least one validation tool pipeline mapping.");
+                    if(checked.length === 0) return alert("Please map specific pipelines.");
                     allowed_tools = checked;
                 }
 
@@ -559,7 +599,7 @@ def index_page():
                     refreshTelemetry();
                 } else {
                     const err = await res.json();
-                    alert(err.detail || "Key collision detected.");
+                    alert(err.detail || "Key collision structural error.");
                 }
             }
 
