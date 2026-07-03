@@ -10,10 +10,10 @@ TARGET_BASE_URL = "https://ft-osint-api.duckdns.org/api"
 DEVELOPER_NAME = "@vernexzz"
 CHANNEL_URL = "https://t.me/shayan_explorer_channel"
 
-# Shared memory pool for real-time tracking metrics across browser sessions
+# Shared telemetry data logger across session cycles
 SYSTEM_LIVE_LOGS = []
 
-# Full list of system-integrated core API route modules
+# Complete verified list of all 28 core system-integrated API routes
 CORE_API_ENDPOINTS = [
     "adv", "paytm", "imei", "calltracer", "upi", "ifsc", "number", 
     "pincode", "ip", "challan", "ff", "bgmi", "snap", "email", 
@@ -49,41 +49,48 @@ async def app(scope, receive, send):
         endpoint = path.replace("/api/", "", 1)
         client_key = params.get("key")
         
-        # Extract metadata metrics managed via the browser state storage layout
-        client_name = urllib.parse.unquote(params.get("client_name", "External App"))
+        # Pull isolation filters passed down from client configuration store
+        client_name = urllib.parse.unquote(params.get("client_name", "External Node"))
         key_limit = int(params.get("key_limit", 1000))
         key_used = int(params.get("key_used", 0))
         key_expiry = urllib.parse.unquote(params.get("key_expires", "2027-12-31 23:59:59"))
         allowed_tools = urllib.parse.unquote(params.get("key_tools", "all"))
 
         if not client_key:
-            await send_json(send, {"error": "Invalid token configuration identifier."}, 403)
+            await send_json(send, {"error": "Missing client authorization identifier token."}, 403)
             return
 
         # Check Expiration Frame
         try:
             if datetime.utcnow() > datetime.strptime(key_expiry, "%Y-%m-%d %H:%M:%S"):
-                await send_json(send, {"error": "Your allocated license access window has expired."}, 403)
+                await send_json(send, {"error": "Allocated key window timeline has expired."}, 403)
                 return
         except Exception:
             pass
 
         # Check Total Quota Limits
         if key_used >= key_limit:
-            await send_json(send, {"error": "API query limitations exhausted."}, 429)
+            await send_json(send, {"error": "API token quota usage limit exceeded."}, 429)
             return
 
-        # Validate Target Endpoint Scope Boundaries
+        # Validate Allowed Scopes
         if allowed_tools != "all":
             allowed_list = [t.strip().lower() for t in allowed_tools.split(",")]
             if endpoint.lower() not in allowed_list:
-                await send_json(send, {"error": f"Access denied. This key is limited to specific tools: {allowed_tools}"}, 403)
+                await send_json(send, {"error": f"Access Denied. Endpoint restriction active. Allowed: {allowed_tools}"}, 403)
                 return
 
-        # Strip internal control arguments before proxying downstream
-        cleaned_params = {k: v for k, v in params.items() if k not in ["key", "client_name", "key_limit", "key_used", "key_expires", "key_tools"]}
+        # Core query params scrubbed of old default dev parameters and internal proxy blocks
+        cleaned_params = {}
+        for k, v in params.items():
+            if k not in ["key", "client_name", "key_limit", "key_used", "key_expires", "key_tools"]:
+                # Force replace legacy credentials if mistakenly requested by external callers
+                if "ftgamer" in str(v).lower() or "bronex" in str(v).lower():
+                    cleaned_params[k] = "vernexzz"
+                else:
+                    cleaned_params[k] = v
         
-        # Inject live stream telemetry log packet
+        # Log this payload execution trace line
         SYSTEM_LIVE_LOGS.insert(0, {
             "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             "key": client_key,
@@ -91,7 +98,7 @@ async def app(scope, receive, send):
             "params": str(cleaned_params)
         })
 
-        # Append master routing credentials
+        # Inject Master Upstream Key
         cleaned_params["key"] = MASTER_API_KEY
         upstream_url = f"{TARGET_BASE_URL}/{endpoint}"
         
@@ -101,11 +108,11 @@ async def app(scope, receive, send):
                 await send_json(send, response.json(), response.status_code)
                 return
             except Exception as e:
-                await send_json(send, {"error": "Target core connection timeout", "details": str(e)}, 502)
+                await send_json(send, {"error": "Target engine cluster connection timeout", "details": str(e)}, 502)
                 return
 
     # ====================================================
-    # 2. TELEMETRY LOG BUFFER SYNC ENDPOINT
+    # 2. TELEMETRY LOG DATA ACCESS ENDPOINT
     # ====================================================
     elif path == "/admin/logs":
         await send_json(send, {"logs": SYSTEM_LIVE_LOGS[:30]})
@@ -117,19 +124,19 @@ async def app(scope, receive, send):
     elif path == "/":
         endpoints_json = json.dumps(CORE_API_ENDPOINTS)
         
-        # Generate the checkbox grid HTML array for all tools dynamically
+        # Dynamically generate key scope checkboxes
         checkbox_grid_html = ""
         for tool in CORE_API_ENDPOINTS:
             checkbox_grid_html += f"""
             <div class="relative">
                 <input type="checkbox" id="scope_{tool}" value="{tool}" class="hidden api-checkbox individual-scope">
-                <label for="scope_{tool}" class="block text-center p-2 rounded-lg tool-btn cursor-pointer font-medium tracking-wide border border-gray-800 text-gray-400 bg-gray-900 transition text-[11px] uppercase">
+                <label for="scope_{tool}" class="block text-center p-2 rounded-lg tool-btn cursor-pointer font-medium border border-gray-800 text-gray-400 bg-gray-900 transition text-[11px] uppercase">
                     {tool}
                 </label>
             </div>
             """
 
-        # Generate sandbox click layout tool items dynamically
+        # Dynamically generate interactable sandbox buttons
         sandbox_grid_html = ""
         for idx, tool in enumerate(CORE_API_ENDPOINTS):
             active_class = "active" if idx == 0 else ""
@@ -145,25 +152,20 @@ async def app(scope, receive, send):
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <title>Control Desk | {DEVELOPER_NAME}</title>
+            <title>Nexus Panel Matrix | {DEVELOPER_NAME}</title>
             <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
             <style>
                 body {{ 
                     background-color: #030712; 
                     color: #f1f5f9; 
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
-                    -webkit-font-smoothing: antialiased;
                 }}
                 .crypto-panel {{ 
                     background: #090d16; 
                     border: 1px solid #1e293b; 
-                    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
-                }}
-                .neon-glow-text {{ 
-                    text-shadow: 0 0 10px rgba(59, 130, 246, 0.4); 
                 }}
                 
-                /* FIX: Complete Removal of Any White Field Traits or Auto-Fill Backgrounds */
+                /* FIX: Complete removal of white fields and light browser defaults */
                 input[type="text"], input[type="number"], input[type="datetime-local"] {{
                     background-color: #020617 !important;
                     color: #ffffff !important;
@@ -179,81 +181,75 @@ async def app(scope, receive, send):
                     background: #020617;
                     border: 1px solid #1e293b;
                 }}
-                .tool-btn:hover {{
-                    border-color: #334155;
-                }}
                 .tool-btn.active {{
-                    background: rgba(59, 130, 246, 0.12) !important;
+                    background: rgba(59, 130, 246, 0.15) !important;
                     border-color: #3b82f6 !important;
                     color: #60a5fa !important;
-                    box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
                 }}
                 .api-checkbox:checked + label {{
-                    background: rgba(59, 130, 246, 0.12) !important;
+                    background: rgba(59, 130, 246, 0.15) !important;
                     border-color: #3b82f6 !important;
                     color: #60a5fa !important;
                 }}
                 ::-webkit-scrollbar {{ width: 5px; height: 5px; }}
-                ::-webkit-scrollbar-track {{ background: #030712; }}
                 ::-webkit-scrollbar-thumb {{ background: #1e293b; border-radius: 4px; }}
             </style>
         </head>
         <body class="p-3 sm:p-5 min-h-screen">
 
             <div class="max-w-7xl mx-auto space-y-5">
-                <!-- System Header Operations Desk -->
+                <!-- Header Component with Authorized Branding Links -->
                 <header class="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-gray-800 pb-4 gap-4">
                     <div>
-                        <h1 class="text-lg md:text-xl font-bold tracking-wider text-blue-500 neon-glow-text uppercase">NEXUS CORE INSTANCE</h1>
+                        <h1 class="text-lg md:text-xl font-bold tracking-wider text-blue-500 uppercase">OSINT GATEWAY MONITOR</h1>
                         <div class="flex items-center gap-2 mt-1 text-xs text-gray-400 font-mono">
-                            <span>DEVELOPER:</span>
-                            <a href="{CHANNEL_URL}" target="_blank" class="text-blue-400 hover:underline font-bold">{DEVELOPER_NAME}</a>
+                            <span>OWNER MASTER:</span>
+                            <a href="{CHANNEL_URL}" target="_blank" class="text-blue-400 hover:underline font-bold font-mono text-sm tracking-wide">{DEVELOPER_NAME}</a>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2.5 w-full md:w-auto justify-between md:justify-end">
-                        <button onclick="toggleCleanReconDisplay()" class="text-xs bg-gray-900 hover:bg-gray-800 border border-gray-700 text-gray-300 font-medium px-3 py-2 rounded-lg transition active:scale-95">
-                            👁️ REVEAL NO-KEY VALUES
+                    <div class="flex items-center gap-2 w-full md:w-auto justify-between md:justify-end">
+                        <button onclick="toggleKeyMaskingState()" class="text-xs bg-gray-900 hover:bg-gray-800 border border-gray-700 text-gray-300 font-medium px-3 py-2 rounded-lg transition">
+                            👁️ MASK/UNMASK KEYS
                         </button>
-                        <span class="text-[10px] sm:text-xs font-bold font-mono tracking-wider bg-blue-950 text-blue-400 px-3 py-1.5 rounded-lg border border-blue-900">PERSISTENCE_SYNCED</span>
+                        <span class="text-xs font-bold font-mono tracking-wider bg-blue-950 text-blue-400 px-3 py-1.5 rounded-lg border border-blue-900">CORE_ONLINE</span>
                     </div>
                 </header>
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                    <!-- Token Generation Module -->
-                    <div class="crypto-panel p-4 rounded-xl flex flex-col justify-between">
+                    <!-- Dynamic Provisioning Terminal Block -->
+                    <div class="crypto-panel p-4 rounded-xl">
                         <form id="tokenGenerationForm" onsubmit="commitNewTokenToRegistry(event)" class="space-y-4 text-xs">
-                            <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2">PROVISION ACCESS KEY</h2>
+                            <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2">PROVISION RECON LINK KEY</h2>
                             
                             <div>
-                                <label class="block text-gray-400 font-medium mb-1 tracking-wide">CLIENT ROUTE NAME</label>
-                                <input type="text" id="inputClientName" placeholder="Enter username..." required class="w-full rounded-lg p-2.5 text-white transition">
+                                <label class="block text-gray-400 font-medium mb-1">CLIENT ASSIGNMENT NAME</label>
+                                <input type="text" id="inputClientName" placeholder="Username / ID Reference" required class="w-full rounded-lg p-2.5 text-white">
                             </div>
                             <div>
-                                <label class="block text-gray-400 font-medium mb-1 tracking-wide">CUSTOM LICENSE KEY</label>
+                                <label class="block text-gray-400 font-medium mb-1">CUSTOM KEY STRING</label>
                                 <div class="flex gap-2">
-                                    <input type="text" id="inputLicenseKey" placeholder="e.g. VIP-SHAYAN-7" required class="w-full rounded-lg p-2.5 text-yellow-500 font-mono transition">
-                                    <button type="button" onclick="triggerKeyGen()" class="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white px-3 rounded-lg font-mono">GEN</button>
+                                    <input type="text" id="inputLicenseKey" placeholder="e.g. CUSTOM-VX-TOKEN" required class="w-full rounded-lg p-2.5 text-yellow-500 font-mono">
+                                    <button type="button" onclick="triggerKeyGen()" class="bg-gray-800 border border-gray-700 hover:bg-gray-700 text-white px-3 rounded-lg font-mono">AUTO</button>
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-2">
                                 <div>
-                                    <label class="block text-gray-400 font-medium mb-1 tracking-wide">MAX QUOTA LIMIT</label>
-                                    <input type="number" id="inputQuotaLimit" value="1000" required class="w-full rounded-lg p-2.5 text-white transition">
+                                    <label class="block text-gray-400 font-medium mb-1">CALL QUOTA CAP</label>
+                                    <input type="number" id="inputQuotaLimit" value="2500" required class="w-full rounded-lg p-2.5 text-white">
                                 </div>
                                 <div>
-                                    <label class="block text-gray-400 font-medium mb-1 tracking-wide">EXPIRATION LIMIT</label>
-                                    <input type="datetime-local" id="inputExpiryFrame" required class="w-full rounded-lg p-2.5 text-white transition">
+                                    <label class="block text-gray-400 font-medium mb-1">TIME EXPIRATION LOCK</label>
+                                    <input type="datetime-local" id="inputExpiryFrame" required class="w-full rounded-lg p-2.5 text-white">
                                 </div>
                             </div>
 
-                            <!-- Scope Restriction Checklist Grid Interface -->
                             <div>
-                                <label class="block text-gray-400 font-medium mb-1.5 tracking-wider uppercase text-[10px]">ALLOWED ENDPOINT ALLOCATION MATRIX</label>
-                                <div class="max-h-48 overflow-y-auto border border-gray-800 p-2 rounded-lg bg-black bg-opacity-30 space-y-2">
+                                <label class="block text-gray-400 font-medium mb-1.5 uppercase tracking-wider text-[10px]">ROUTE SCOPE MATRIX ALLOCATION</label>
+                                <div class="max-h-44 overflow-y-auto border border-gray-800 p-2 rounded-lg bg-black bg-opacity-40 space-y-2">
                                     <div class="relative">
                                         <input type="checkbox" id="scope_all" value="all" checked onchange="handleAllScopeToggle(this)" class="hidden api-checkbox">
                                         <label for="scope_all" class="block text-center p-2 rounded-lg tool-btn cursor-pointer font-bold border border-blue-900 text-blue-400 bg-gray-900 text-[11px] uppercase">
-                                            ⭐ SELECT ALL APIS
+                                            ⭐ UNRESTRICTED SYSTEM ACCESS (ALL ENDPOINTS)
                                         </label>
                                     </div>
                                     <div class="grid grid-cols-2 gap-1.5">
@@ -262,36 +258,34 @@ async def app(scope, receive, send):
                                 </div>
                             </div>
 
-                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg tracking-widest uppercase shadow transition active:scale-98">INJECT ROUTE REGISTRY</button>
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg tracking-widest uppercase transition">INJECT ROUTE REGISTRY</button>
                         </form>
                     </div>
 
-                    <!-- Database Registry Matrix Viewer Box -->
-                    <div class="lg:col-span-2 crypto-panel p-4 rounded-xl flex flex-col justify-between overflow-hidden">
-                        <div class="w-full">
-                            <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2 mb-2.5">ACTIVE NETWORK ACCESS CREDS</h2>
-                            <div class="overflow-x-auto w-full">
-                                <table class="w-full text-left text-xs min-w-[550px]">
-                                    <thead>
-                                        <tr class="border-b border-gray-800 text-gray-500 font-mono tracking-wider">
-                                            <th class="pb-2">CLIENT</th>
-                                            <th class="pb-2">TOKEN ROUTE IDENTIFIER</th>
-                                            <th class="pb-2">QUOTA CAPACITY</th>
-                                            <th class="pb-2">EXPIRATION TIME LOCK</th>
-                                            <th class="pb-2">BOUND RECON SCOPES</th>
-                                            <th class="pb-2 text-right">MGMT</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="registryTableElementRows" class="divide-y divide-gray-950">
-                                        <!-- Dynamically managed via JavaScript device storage runloop -->
-                                    </tbody>
-                                </table>
-                            </div>
+                    <!-- Client Active Data Grid Table Layout -->
+                    <div class="lg:col-span-2 crypto-panel p-4 rounded-xl overflow-hidden">
+                        <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2 mb-2.5">ACTIVE ROUTING DATABASE</h2>
+                        <div class="overflow-x-auto w-full">
+                            <table class="w-full text-left text-xs min-w-[580px]">
+                                <thead>
+                                    <tr class="border-b border-gray-800 text-gray-500 font-mono">
+                                        <th class="pb-2">CLIENT DESIGNATION</th>
+                                        <th class="pb-2">SECRET ROUTE TOKEN</th>
+                                        <th class="pb-2">QUOTA PROG</th>
+                                        <th class="pb-2">TIME BLOCK EXPIRES</th>
+                                        <th class="pb-2">BOUND RECON MODULES</th>
+                                        <th class="pb-2 text-right">ACTION</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="registryTableElementRows" class="divide-y divide-gray-950">
+                                    <!-- Populated via system runtime JS storage hook -->
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
 
-                <!-- Sandbox Instant Verification Desk Workspace -->
+                <!-- FIX: Fully Repaired & Responsive Interactive Sandbox Desk Workspace -->
                 <div class="crypto-panel p-4 rounded-xl space-y-3.5">
                     <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2">INTERACTIVE SANDBOX matrix DESK</h2>
                     
@@ -301,54 +295,59 @@ async def app(scope, receive, send):
 
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs items-end">
                         <div>
-                            <label class="block text-gray-500 font-medium mb-1">TARGET ROUTER ENDPOINT</label>
-                            <input type="text" id="targetSandboxPathField" value="adv" class="w-full rounded-lg p-2.5 font-mono text-gray-400" readonly>
+                            <label class="block text-gray-500 font-medium mb-1">TARGET ROUTER ENDPOINT ROUTE</label>
+                            <div class="flex items-center bg-gray-950 rounded-lg border border-gray-800 font-mono text-gray-300 p-2.5">
+                                <span class="text-gray-600 pr-1">/api/</span>
+                                <input type="text" id="targetSandboxPathField" value="adv" class="w-full bg-transparent border-none text-white focus:ring-0 p-0 m-0 font-mono" readonly style="background-color:transparent !important; border:none !important; box-shadow:none !important;">
+                            </div>
                         </div>
                         <div>
-                            <label class="block text-gray-500 font-medium mb-1">PROBE KEY INJECTOR</label>
-                            <input type="text" id="targetSandboxKeyField" placeholder="Click any key configuration from your active registry list..." class="w-full rounded-lg p-2.5 font-mono text-yellow-500">
+                            <label class="block text-gray-500 font-medium mb-1">ACTIVE TEST AUTH KEY INJECTOR</label>
+                            <input type="text" id="targetSandboxKeyField" placeholder="Select or type registry token key here..." class="w-full rounded-lg p-2.5 font-mono text-yellow-500">
                         </div>
-                        <button onclick="executeSandboxProbeRequest()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg tracking-wider uppercase transition active:scale-98">FIRE ENDPOINT PROBE</button>
+                        <button onclick="executeSandboxProbeRequest()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg tracking-wider uppercase transition">FIRE ENDPOINT PROBE</button>
                     </div>
-                    <div id="sandboxResponseTerminal" class="hidden p-3 bg-black border border-gray-900 rounded-lg font-mono text-xs text-green-400 overflow-x-auto whitespace-pre-wrap"></div>
+                    
+                    <!-- Fixed Target Output Window Container UI Layout -->
+                    <div id="sandboxResponseTerminal" class="hidden p-4 bg-black border border-gray-900 rounded-lg font-mono text-xs text-green-400 overflow-x-auto whitespace-pre-wrap max-h-96"></div>
                 </div>
 
-                <!-- Network Telemetry Tracking Stream Monitor Frame -->
+                <!-- Network Telemetry Activity Tracker Monitor Engine Row -->
                 <div class="crypto-panel p-4 rounded-xl">
                     <div class="flex justify-between items-center border-b border-gray-800 pb-2 mb-2.5">
-                        <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase">LIVE ROUTE PACKET STREAMS</h2>
-                        <button onclick="syncTelemetryLogsFeed()" class="text-[10px] bg-gray-950 hover:bg-gray-900 border border-gray-800 px-2.5 py-1 rounded-md text-gray-400">SYNC LOGS</button>
+                        <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase">LIVE SYSTEM TRANSACTION TRACKING PACKETS</h2>
+                        <button onclick="syncTelemetryLogsFeed()" class="text-[10px] bg-gray-950 border border-gray-800 px-2.5 py-1 rounded-md text-gray-400 hover:text-white">FORCE SYNC</button>
                     </div>
                     <div class="overflow-x-auto max-h-48 text-xs font-mono">
                         <table class="w-full text-left">
                             <thead>
                                 <tr class="text-gray-500 border-b border-gray-900">
-                                    <th class="pb-1">TIMESTAMP</th>
-                                    <th class="pb-1">KEY REFS</th>
-                                    <th class="pb-1">ROUTED ENDPOINT</th>
-                                    <th class="pb-1">PAYLOAD TRACE METRICS</th>
+                                    <th class="pb-1">TIMESTAMP UTC</th>
+                                    <th class="pb-1">CLIENT ACCESS KEY</th>
+                                    <th class="pb-1">ROUTED TARGET</th>
+                                    <th class="pb-1">CLEANED PARAMETERS MATRIX</th>
                                 </tr>
                             </thead>
                             <tbody id="telemetryPacketStreamBodyRows" class="divide-y divide-gray-950">
-                                <tr><td colspan="4" class="py-4 text-center text-gray-600">Awaiting runtime data parsing stream synchronization...</td></tr>
+                                <tr><td colspan="4" class="py-4 text-center text-gray-600">Awaiting stream execution sequence data threads...</td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
             </div>
 
-            <!-- UI PERSISTENCE AND DEVICEMATRIX STORAGE RUNTIME -->
+            <!-- JAVASCRIPT APP MATRIX CONTROLLERS -->
             <script>
                 let maskStateActive = false;
-                const coreEndpointsArray = {endpoints_json};
                 const defaultTimeLockISO = "2027-12-31T23:59";
                 document.getElementById('inputExpiryFrame').value = defaultTimeLockISO;
 
+                // Instantiate operational fallback node credentials if clear
                 if (!localStorage.getItem('NEXUS_REGISTRIES_DATABASE')) {{
                     localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify({{
-                        "VIP-MASTER": {{
-                            name: "Root Core Profile",
-                            limit: 5000,
+                        "VX-MASTER-KEY": {{
+                            name: "Root Master Hub",
+                            limit: 99999,
                             used: 0,
                             expires_at: "2027-12-31 23:59:59",
                             allowed_tools: "all"
@@ -360,16 +359,14 @@ async def app(scope, receive, send):
                     const individualBoxes = document.querySelectorAll('.individual-scope');
                     individualBoxes.forEach(box => {{
                         box.checked = false;
-                        if(masterCheckbox.checked) box.disabled = true;
-                        else box.disabled = false;
+                        box.disabled = masterCheckbox.checked;
                     }});
                 }}
 
                 function compileSelectedScopesString() {{
                     if(document.getElementById('scope_all').checked) return "all";
                     let checkedScopes = [];
-                    const individualBoxes = document.querySelectorAll('.individual-scope');
-                    individualBoxes.forEach(box => {{
+                    document.querySelectorAll('.individual-scope').forEach(box => {{
                         if(box.checked) checkedScopes.push(box.value);
                     }});
                     return checkedScopes.length > 0 ? checkedScopes.join(', ') : "all";
@@ -381,29 +378,33 @@ async def app(scope, receive, send):
                     targetBody.innerHTML = '';
 
                     if(Object.keys(db).length === 0) {{
-                        targetBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-gray-600">No active records allocated in device local space registry.</td></tr>`;
+                        targetBody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-gray-600">No client profiles cataloged in active memory registers.</td></tr>`;
                         return;
                     }}
 
                     for(const [key, profile] of Object.entries(db)) {{
-                        const renderedKey = maskStateActive ? '••••••••••••' : key;
-                        const clickActionString = maskStateActive ? `"${{profile.name}} [Scope: ${{profile.allowed_tools}}] Limit: ${{profile.used}}/${{profile.limit}}"` : `"${{key}}"`;
+                        const renderedKey = maskStateActive ? '••••••••••••••••' : key;
                         
                         targetBody.innerHTML += `
                             <tr class="hover:bg-gray-950 transition-colors">
-                                <td class="py-2.5 text-white font-semibold tracking-wide">${{profile.name}}</td>
+                                <td class="py-2.5 text-white font-semibold">${{profile.name}}</td>
                                 <td class="py-2.5 font-mono">
-                                    <span class="text-yellow-500 cursor-pointer hover:underline" onclick='executeGlobalClipboardInject(${{clickActionString}})' title="Click to instantly copy or inject configuration module">${{renderedKey}}</span>
+                                    <span class="text-yellow-500 cursor-pointer hover:underline" onclick="injectKeyToSandbox('${{key}}')" title="Click to instantly inject to test verification engine">${{renderedKey}}</span>
                                 </td>
                                 <td class="py-2.5 font-mono text-gray-300">${{profile.used}} / ${{profile.limit}}</td>
-                                <td class="py-2.5 text-gray-400 font-sans text-xs">${{profile.expires_at}}</td>
-                                <td class="py-2.5 text-blue-400 font-mono text-[11px]">${{profile.allowed_tools}}</td>
+                                <td class="py-2.5 text-gray-400 font-mono text-[11px]">${{profile.expires_at}}</td>
+                                <td class="py-2.5 text-blue-400 font-mono text-[11px] max-w-xs truncate" title="${{profile.allowed_tools}}">${{profile.allowed_tools}}</td>
                                 <td class="py-2.5 text-right">
-                                    <button onclick="purgeKeyFromStorage('${{key}}')" class="text-red-500 hover:text-red-400 font-bold transition">REVOKE</button>
+                                    <button onclick="purgeKeyFromStorage('${{key}}')" class="text-red-500 hover:text-red-400 font-bold">REVOKE</button>
                                 </td>
                             </tr>
                         `;
                     }}
+                }}
+
+                function injectKeyToSandbox(key) {{
+                    document.getElementById('targetSandboxKeyField').value = key;
+                    alert("Token structural key value successfully assigned to sandbox field input router node.");
                 }}
 
                 function commitNewTokenToRegistry(e) {{
@@ -443,18 +444,9 @@ async def app(scope, receive, send):
                     }}
                 }}
 
-                function toggleCleanReconDisplay() {{
+                function toggleKeyMaskingState() {{
                     maskStateActive = !maskStateActive;
                     loadRegistriesViewTableMatrix();
-                }}
-
-                function executeGlobalClipboardInject(text) {{
-                    if(!maskStateActive) {{
-                        document.getElementById('targetSandboxKeyField').value = text;
-                    }}
-                    navigator.clipboard.writeText(text).then(() => {{
-                        alert("Injected payload token to clipboard payload structure:\\n" + text);
-                    }}).catch(() => {{}});
                 }}
 
                 function bindSandboxTarget(btnElement, pathName) {{
@@ -464,7 +456,7 @@ async def app(scope, receive, send):
                 }}
 
                 function triggerKeyGen() {{
-                    const generatedToken = "NX-" + Math.random().toString(36).substring(2, 7).toUpperCase() + "-" + Math.random().toString(36).substring(2, 7).toUpperCase();
+                    const generatedToken = "VX-" + Math.random().toString(36).substring(2, 7).toUpperCase() + "-" + Math.random().toString(36).substring(2, 7).toUpperCase();
                     document.getElementById('inputLicenseKey').value = generatedToken;
                 }}
 
@@ -474,20 +466,24 @@ async def app(scope, receive, send):
                     const terminalDisplay = document.getElementById('sandboxResponseTerminal');
 
                     if(!key) {{
-                        alert("Please configure or assign an active authorization key profile node first.");
+                        alert("Configure or inject an authorization registry record key line item before routing live checks.");
                         return;
                     }}
 
                     const clientStorageMatrix = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
-                    const contextProfile = clientStorageMatrix[key] || {{ name: "Sandbox User", limit: 1000, used: 0, expires_at: "2027-12-31 23:59:59", allowed_tools: "all" }};
+                    const contextProfile = clientStorageMatrix[key] || {{ name: "Adhoc Probe Exec", limit: 1000, used: 0, expires_at: "2027-12-31 23:59:59", allowed_tools: "all" }};
 
                     terminalDisplay.classList.remove('hidden');
-                    terminalDisplay.innerText = "Transmitting probe payload packet traces downstream to target gateways...";
+                    terminalDisplay.innerText = "Transmitting secure connection payload matrix frames downstream...";
 
-                    const connectionUrl = `/api/${{endpoint}}?key=${{encodeURIComponent(key)}}&client_name=${{encodeURIComponent(contextProfile.name)}}&key_limit=${{contextProfile.limit}}&key_used=${{contextProfile.used}}&key_expires=${{encodeURIComponent(contextProfile.expires_at)}}&key_tools=${{encodeURIComponent(contextProfile.allowed_tools)}}&num=9876543210&upi=example@ybl&ifsc=SBIN0001234&pin=110001&ip=8.8.8.8&vehicle=DL3C1234&uid=123456&username=test_user&email=test@gmail.com`;
+                    // Standard dynamic playground argument injection mapping
+                    const baseParams = `?key=${{encodeURIComponent(key)}}&client_name=${{encodeURIComponent(contextProfile.name)}}&key_limit=${{contextProfile.limit}}&key_used=${{contextProfile.used}}&key_expires=${{encodeURIComponent(contextProfile.expires_at)}}&key_tools=${{encodeURIComponent(contextProfile.allowed_tools)}}`;
+                    const operationalQueryMock = `&num=9876543210&upi=example@ybl&ifsc=SBIN0001234&pin=110001&ip=8.8.8.8&vehicle=UP42BB2572&uid=3143389983&username=priyapanchal272&email=airtel123@gmail.com&imei=357817383506298&info=username&id=7530266953&name=abhiraaj&pan=AXDPR2606K&counter=5`;
+
+                    const completeTargetUrl = `/api/${{endpoint}}${{baseParams}}${{operationalQueryMock}}`;
 
                     try {{
-                        const res = await fetch(connectionUrl);
+                        const res = await fetch(completeTargetUrl);
                         const responsePayload = await res.json();
                         
                         if(res.ok) {{
@@ -499,7 +495,7 @@ async def app(scope, receive, send):
                         }}
                         terminalDisplay.innerText = JSON.stringify(responsePayload, null, 4);
                     }} catch (err) {{
-                        terminalDisplay.innerText = "Proxy Intercept Connection Failure: " + err.toString();
+                        terminalDisplay.innerText = "Proxy Connection Error (Check terminal deployment console logs): " + err.toString();
                     }}
                     syncTelemetryLogsFeed();
                 }}
@@ -512,7 +508,7 @@ async def app(scope, receive, send):
                         logsTbody.innerHTML = '';
 
                         if(!data.logs || data.logs.length === 0) {{
-                            logsTbody.innerHTML = `<tr><td colspan="4" class="py-3 text-center text-gray-600">No network data traffic traces verified yet.</td></tr>`;
+                            logsTbody.innerHTML = `<tr><td colspan="4" class="py-3 text-center text-gray-600">No inbound api requests parsed through the gateway cluster stack yet.</td></tr>`;
                             return;
                         }}
 
@@ -521,8 +517,8 @@ async def app(scope, receive, send):
                                 <tr class="border-b border-gray-950 hover:bg-gray-950 transition-colors">
                                     <td class="py-2 text-gray-500">${{log.timestamp}}</td>
                                     <td class="py-2 text-yellow-600 font-bold">${{log.key}}</td>
-                                    <td class="py-2 text-green-400">/api/${{log.endpoint}}</td>
-                                    <td class="py-2 text-gray-400 font-sans bg-gray-900 bg-opacity-30 px-2 rounded">${{log.params}}</td>
+                                    <td class="py-2 text-blue-400">/api/${{log.endpoint}}</td>
+                                    <td class="py-2 text-gray-400 font-sans bg-gray-900 bg-opacity-30 px-2 rounded max-w-xs truncate" title="${{log.params}}">${{log.params}}</td>
                                 </tr>
                             `;
                         }});
@@ -533,7 +529,7 @@ async def app(scope, receive, send):
                     loadRegistriesViewTableMatrix();
                     handleAllScopeToggle(document.getElementById('scope_all'));
                     syncTelemetryLogsFeed();
-                    setInterval(syncTelemetryLogsFeed, 12000);
+                    setInterval(syncTelemetryLogsFeed, 10000);
                 }};
             </script>
         </body>
@@ -543,7 +539,7 @@ async def app(scope, receive, send):
         return
 
     else:
-        await send_json(send, {"detail": f"Path '{path}' not found on Nexus Gateway Server."}, 404)
+        await send_json(send, {"detail": f"Route route '{path}' does not point to an active nexus core node assembly."}, 404)
 
 async def send_json(send, data: dict, status_code: int = 200):
     body = json.dumps(data).encode('utf-8')
