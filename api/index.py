@@ -32,6 +32,29 @@ def parse_query_string(query_string: str) -> dict:
             params[k] = v
     return params
 
+def scrub_legacy_branding(data):
+    """
+    Recursively loops through the entire JSON response layout payload to detect 
+    and replace any instance of legacy developer credits or channel URLs.
+    """
+    if isinstance(data, dict):
+        for k, v in list(data.items()):
+            if isinstance(v, str):
+                v_lower = v.lower()
+                if "ftgamer" in v_lower or "bronex" in v_lower or "lynx_api" in v_lower:
+                    if k == "by":
+                        data[k] = DEVELOPER_NAME
+                    elif k == "channel":
+                        data[k] = CHANNEL_URL
+                    else:
+                        data[k] = v.replace("@ftgamer2", DEVELOPER_NAME).replace("https://t.me/lynx_api", CHANNEL_URL).replace("@BronexUltra", DEVELOPER_NAME)
+            else:
+                scrub_legacy_branding(v)
+    elif isinstance(data, list):
+        for item in data:
+            scrub_legacy_branding(item)
+    return data
+
 async def app(scope, receive, send):
     global SYSTEM_LIVE_LOGS
     
@@ -80,11 +103,10 @@ async def app(scope, receive, send):
                 await send_json(send, {"error": f"Access Denied. Endpoint restriction active. Allowed: {allowed_tools}"}, 403)
                 return
 
-        # Core query params scrubbed of old default dev parameters and internal proxy blocks
+        # Clean query parameters of internal framework variables
         cleaned_params = {}
         for k, v in params.items():
             if k not in ["key", "client_name", "key_limit", "key_used", "key_expires", "key_tools"]:
-                # Force replace legacy credentials if mistakenly requested by external callers
                 if "ftgamer" in str(v).lower() or "bronex" in str(v).lower():
                     cleaned_params[k] = "vernexzz"
                 else:
@@ -105,7 +127,14 @@ async def app(scope, receive, send):
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(upstream_url, params=cleaned_params, timeout=12.0)
-                await send_json(send, response.json(), response.status_code)
+                
+                # Fetch raw JSON payload mapping
+                raw_response_json = response.json()
+                
+                # FIX: Intercept payload string mapping directly to erase old fields
+                scrubbed_response_json = scrub_legacy_branding(raw_response_json)
+                
+                await send_json(send, scrubbed_response_json, response.status_code)
                 return
             except Exception as e:
                 await send_json(send, {"error": "Target engine cluster connection timeout", "details": str(e)}, 502)
@@ -124,7 +153,6 @@ async def app(scope, receive, send):
     elif path == "/":
         endpoints_json = json.dumps(CORE_API_ENDPOINTS)
         
-        # Dynamically generate key scope checkboxes
         checkbox_grid_html = ""
         for tool in CORE_API_ENDPOINTS:
             checkbox_grid_html += f"""
@@ -136,7 +164,6 @@ async def app(scope, receive, send):
             </div>
             """
 
-        # Dynamically generate interactable sandbox buttons
         sandbox_grid_html = ""
         for idx, tool in enumerate(CORE_API_ENDPOINTS):
             active_class = "active" if idx == 0 else ""
@@ -164,8 +191,6 @@ async def app(scope, receive, send):
                     background: #090d16; 
                     border: 1px solid #1e293b; 
                 }}
-                
-                /* FIX: Complete removal of white fields and light browser defaults */
                 input[type="text"], input[type="number"], input[type="datetime-local"] {{
                     background-color: #020617 !important;
                     color: #ffffff !important;
@@ -176,7 +201,6 @@ async def app(scope, receive, send):
                     border-color: #3b82f6 !important;
                     box-shadow: 0 0 8px rgba(59, 130, 246, 0.3) !important;
                 }}
-                
                 .tool-btn {{
                     background: #020617;
                     border: 1px solid #1e293b;
@@ -198,7 +222,6 @@ async def app(scope, receive, send):
         <body class="p-3 sm:p-5 min-h-screen">
 
             <div class="max-w-7xl mx-auto space-y-5">
-                <!-- Header Component with Authorized Branding Links -->
                 <header class="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-gray-800 pb-4 gap-4">
                     <div>
                         <h1 class="text-lg md:text-xl font-bold tracking-wider text-blue-500 uppercase">OSINT GATEWAY MONITOR</h1>
@@ -216,7 +239,6 @@ async def app(scope, receive, send):
                 </header>
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                    <!-- Dynamic Provisioning Terminal Block -->
                     <div class="crypto-panel p-4 rounded-xl">
                         <form id="tokenGenerationForm" onsubmit="commitNewTokenToRegistry(event)" class="space-y-4 text-xs">
                             <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2">PROVISION RECON LINK KEY</h2>
@@ -262,7 +284,6 @@ async def app(scope, receive, send):
                         </form>
                     </div>
 
-                    <!-- Client Active Data Grid Table Layout -->
                     <div class="lg:col-span-2 crypto-panel p-4 rounded-xl overflow-hidden">
                         <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2 mb-2.5">ACTIVE ROUTING DATABASE</h2>
                         <div class="overflow-x-auto w-full">
@@ -277,15 +298,12 @@ async def app(scope, receive, send):
                                         <th class="pb-2 text-right">ACTION</th>
                                     </tr>
                                 </thead>
-                                <tbody id="registryTableElementRows" class="divide-y divide-gray-950">
-                                    <!-- Populated via system runtime JS storage hook -->
-                                </tbody>
+                                <tbody id="registryTableElementRows" class="divide-y divide-gray-950"></tbody>
                             </table>
                         </div>
                     </div>
                 </div>
 
-                <!-- FIX: Fully Repaired & Responsive Interactive Sandbox Desk Workspace -->
                 <div class="crypto-panel p-4 rounded-xl space-y-3.5">
                     <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase border-b border-gray-800 pb-2">INTERACTIVE SANDBOX matrix DESK</h2>
                     
@@ -308,11 +326,9 @@ async def app(scope, receive, send):
                         <button onclick="executeSandboxProbeRequest()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg tracking-wider uppercase transition">FIRE ENDPOINT PROBE</button>
                     </div>
                     
-                    <!-- Fixed Target Output Window Container UI Layout -->
                     <div id="sandboxResponseTerminal" class="hidden p-4 bg-black border border-gray-900 rounded-lg font-mono text-xs text-green-400 overflow-x-auto whitespace-pre-wrap max-h-96"></div>
                 </div>
 
-                <!-- Network Telemetry Activity Tracker Monitor Engine Row -->
                 <div class="crypto-panel p-4 rounded-xl">
                     <div class="flex justify-between items-center border-b border-gray-800 pb-2 mb-2.5">
                         <h2 class="text-xs font-bold tracking-wider text-gray-400 uppercase">LIVE SYSTEM TRANSACTION TRACKING PACKETS</h2>
@@ -336,13 +352,11 @@ async def app(scope, receive, send):
                 </div>
             </div>
 
-            <!-- JAVASCRIPT APP MATRIX CONTROLLERS -->
             <script>
                 let maskStateActive = false;
                 const defaultTimeLockISO = "2027-12-31T23:59";
                 document.getElementById('inputExpiryFrame').value = defaultTimeLockISO;
 
-                // Instantiate operational fallback node credentials if clear
                 if (!localStorage.getItem('NEXUS_REGISTRIES_DATABASE')) {{
                     localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify({{
                         "VX-MASTER-KEY": {{
@@ -389,7 +403,7 @@ async def app(scope, receive, send):
                             <tr class="hover:bg-gray-950 transition-colors">
                                 <td class="py-2.5 text-white font-semibold">${{profile.name}}</td>
                                 <td class="py-2.5 font-mono">
-                                    <span class="text-yellow-500 cursor-pointer hover:underline" onclick="injectKeyToSandbox('${{key}}')" title="Click to instantly inject to test verification engine">${{renderedKey}}</span>
+                                    <span class="text-yellow-500 cursor-pointer hover:underline" onclick="injectKeyToSandbox('${{key}}')">${{renderedKey}}</span>
                                 </td>
                                 <td class="py-2.5 font-mono text-gray-300">${{profile.used}} / ${{profile.limit}}</td>
                                 <td class="py-2.5 text-gray-400 font-mono text-[11px]">${{profile.expires_at}}</td>
@@ -404,7 +418,6 @@ async def app(scope, receive, send):
 
                 function injectKeyToSandbox(key) {{
                     document.getElementById('targetSandboxKeyField').value = key;
-                    alert("Token structural key value successfully assigned to sandbox field input router node.");
                 }}
 
                 function commitNewTokenToRegistry(e) {{
@@ -476,9 +489,8 @@ async def app(scope, receive, send):
                     terminalDisplay.classList.remove('hidden');
                     terminalDisplay.innerText = "Transmitting secure connection payload matrix frames downstream...";
 
-                    // Standard dynamic playground argument injection mapping
                     const baseParams = `?key=${{encodeURIComponent(key)}}&client_name=${{encodeURIComponent(contextProfile.name)}}&key_limit=${{contextProfile.limit}}&key_used=${{contextProfile.used}}&key_expires=${{encodeURIComponent(contextProfile.expires_at)}}&key_tools=${{encodeURIComponent(contextProfile.allowed_tools)}}`;
-                    const operationalQueryMock = `&num=9876543210&upi=example@ybl&ifsc=SBIN0001234&pin=110001&ip=8.8.8.8&vehicle=UP42BB2572&uid=3143389983&username=priyapanchal272&email=airtel123@gmail.com&imei=357817383506298&info=username&id=7530266953&name=abhiraaj&pan=AXDPR2606K&counter=5`;
+                    const operationalQueryMock = `&num=7003741482&upi=example@ybl&ifsc=SBIN0001234&pin=700117&ip=8.8.8.8&vehicle=UP42BB2572&uid=3143389983&username=priyapanchal272&email=airtel123@gmail.com&imei=357817383506298&info=username&id=7530266953&name=abhiraaj&pan=AXDPR2606K&counter=5`;
 
                     const completeTargetUrl = `/api/${{endpoint}}${{baseParams}}${{operationalQueryMock}}`;
 
@@ -495,7 +507,7 @@ async def app(scope, receive, send):
                         }}
                         terminalDisplay.innerText = JSON.stringify(responsePayload, null, 4);
                     }} catch (err) {{
-                        terminalDisplay.innerText = "Proxy Connection Error (Check terminal deployment console logs): " + err.toString();
+                        terminalDisplay.innerText = "Proxy Connection Error: " + err.toString();
                     }}
                     syncTelemetryLogsFeed();
                 }}
@@ -539,7 +551,7 @@ async def app(scope, receive, send):
         return
 
     else:
-        await send_json(send, {"detail": f"Route route '{path}' does not point to an active nexus core node assembly."}, 404)
+        await send_json(send, {"detail": f"Route '{path}' does not point to an active nexus core node assembly."}, 404)
 
 async def send_json(send, data: dict, status_code: int = 200):
     body = json.dumps(data).encode('utf-8')
