@@ -7,24 +7,31 @@ from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, B
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
-# ---- INITIALIZATION CONFIGS ----
+# ---- CONFIGURATION ----
 MASTER_API_KEY = "vx-osint"
 TARGET_BASE_URL = "https://ft-osint-api.duckdns.org/api"
 DEVELOPER_NAME = "SHAYAN_EXPLORER"
 
-# ---- EXTERNAL CLOUD DATABASE ROUTING ----
-# Fallback to local memory only if the environment variable hasn't been added to Vercel yet
+# ---- SERVERLESS SAFE CLOUD DATABASE CONNECTION ----
 DATABASE_URL = os.environ.get("DATABASE_URL")
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-if not DATABASE_URL:
+
+if DATABASE_URL:
+    # Handle older legacy postgres:// URI schemas for SQLAlchemy 2.x
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    
+    # Force production SSL certificates for cloud providers (Supabase / Neon)
+    if "sslmode" not in DATABASE_URL and "localhost" not in DATABASE_URL:
+        DATABASE_URL += "&sslmode=require" if "?" in DATABASE_URL else "?sslmode=require"
+else:
+    # Fail-safe local backup for testing environments
     DATABASE_URL = "sqlite:////tmp/fallback.db"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ---- SCHEMAS ----
+# ---- DATABASE SCHEMAS ----
 class APIKey(Base):
     __tablename__ = "api_keys"
     key = Column(String, primary_key=True, index=True)
@@ -43,9 +50,10 @@ class RequestLog(Base):
     query_params = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+# Instantiate schemas
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title=f"API Gateway Dashboard")
+app = FastAPI(title="API Gateway Dashboard")
 
 def get_db():
     db = SessionLocal()
@@ -54,7 +62,7 @@ def get_db():
     finally:
         db.close()
 
-# ---- CENTRAL PROXY MIDDLEWARE ROUTE ----
+# ---- CORE PROXY REWRITE ENGINE ----
 @app.get("/api/{endpoint}")
 async def proxy_gateway(endpoint: str, request: Request, key: str, db: Session = Depends(get_db)):
     db_key = db.query(APIKey).filter(APIKey.key == key).first()
@@ -65,17 +73,17 @@ async def proxy_gateway(endpoint: str, request: Request, key: str, db: Session =
         raise HTTPException(status_code=403, detail="Your allocated license access window has expired.")
     
     if db_key.used >= db_key.limit:
-        raise HTTPException(status_code=429, detail="API daily/total query limitations exhausted.")
+        raise HTTPException(status_code=429, detail="API query limitations exhausted.")
     
     if db_key.allowed_tools != "all":
         allowed_list = [t.strip() for t in db_key.allowed_tools.split(",")]
         if endpoint not in allowed_list:
-            raise HTTPException(status_code=403, detail=f"Access denied to target submodule: {endpoint}")
+            raise HTTPException(status_code=403, detail=f"Access denied to target sub-module: {endpoint}")
 
     params = dict(request.query_params)
     params.pop("key", None)
     
-    # Store request logs inside the cloud DB tracking engine
+    # Store request histories securely inside your cloud database
     log_entry = RequestLog(key_used=key, endpoint=endpoint, query_params=str(params))
     db.add(log_entry)
     
@@ -90,7 +98,7 @@ async def proxy_gateway(endpoint: str, request: Request, key: str, db: Session =
             response = await client.get(upstream_url, params=params, timeout=12.0)
             return JSONResponse(content=response.json(), status_code=response.status_code)
         except Exception as e:
-            return JSONResponse(content={"error": "Upstream proxy connection timed out", "details": str(e)}, status_code=502)
+            return JSONResponse(content={"error": "Upstream connection error", "details": str(e)}, status_code=502)
 
 # ---- MANAGEMENT HUB DASHBOARD PANEL ----
 @app.get("/", response_class=HTMLResponse)
@@ -116,12 +124,12 @@ async def admin_dashboard(db: Session = Depends(get_db)):
         <div class="max-w-7xl mx-auto">
             <header class="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
                 <div>
-                    <h1 class="text-2xl font-bold text-blue-500 neon-txt">NEXUS ENTERPRISE APP INTERFACE</h1>
+                    <h1 class="text-2xl font-bold text-blue-500 neon-txt">NEXUS APP GATEWAY INTERFACE</h1>
                     <p class="text-xs text-gray-500 mt-1">CORE ARCHITECT: {DEVELOPER_NAME}</p>
                 </div>
                 <div class="flex items-center space-x-2">
                     <span class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
-                    <span class="text-xs text-green-400 font-bold tracking-wider">CLOUD CONNECTED</span>
+                    <span class="text-xs text-green-400 font-bold tracking-wider">CLOUD STABLE</span>
                 </div>
             </header>
 
@@ -154,7 +162,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
                     </form>
                 </div>
 
-                <!-- Database Entries Matrix Table -->
+                <!-- Active Database Allocations -->
                 <div class="lg:col-span-2 panel p-5 rounded-xl overflow-x-auto">
                     <h2 class="text-base font-bold mb-4 text-blue-400 uppercase tracking-wider">Database Registry Allocation Matrix</h2>
                     <table class="w-full text-left text-xs">
@@ -187,7 +195,7 @@ async def admin_dashboard(db: Session = Depends(get_db)):
                 </div>
             </div>
 
-            <!-- Global Logs -->
+            <!-- Global Activity Logs -->
             <div class="mt-6 panel p-5 rounded-xl">
                 <h2 class="text-base font-bold mb-4 text-blue-400 uppercase tracking-wider">Live Traffic Query Inspection Feed</h2>
                 <div class="overflow-x-auto max-h-64 text-xs font-mono">
