@@ -11,6 +11,8 @@ DEVELOPER_NAME = "@vernexzz"
 CHANNEL_URL = "https://t.me/shayan_explorer_channel"
 
 SYSTEM_LIVE_LOGS = []
+# SERVER-SIDE CENTRAL MEMORY FOR KEYS (Fixes External API Requests)
+SERVER_KEY_REGISTRY = {}
 
 CORE_API_ENDPOINTS = [
     "adv", "paytm", "imei", "calltracer", "upi", "ifsc", "number", 
@@ -27,11 +29,13 @@ def parse_query_string(query_string: str) -> dict:
     for pair in pairs:
         if '=' in pair:
             k, v = pair.split('=', 1)
-            params[k] = v
+            params[k] = urllib.parse.unquote(v)
+        else:
+            if pair:
+                params[pair] = ""
     return params
 
 def get_current_ist() -> datetime:
-    # Get current UTC time and shift to Indian Standard Time (UTC+5:30)
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 def scrub_legacy_branding(data):
@@ -54,7 +58,7 @@ def scrub_legacy_branding(data):
     return data
 
 async def app(scope, receive, send):
-    global SYSTEM_LIVE_LOGS
+    global SYSTEM_LIVE_LOGS, SERVER_KEY_REGISTRY
     
     if scope['type'] != 'http':
         return
@@ -63,55 +67,114 @@ async def app(scope, receive, send):
     query_string = scope.get('query_string', b'').decode('utf-8')
     params = parse_query_string(query_string)
 
-    if path.startswith("/api/"):
+    # --- ADMIN CENTRAL REGISTRY SYNC PIPELINE ---
+    if path == "/admin/sync_key":
+        if scope['method'] == 'POST':
+            try:
+                body_bytes = b""
+                more_body = True
+                while more_body:
+                    message = await receive()
+                    body_bytes += message.get('body', b'')
+                    more_body = message.get('more_body', False)
+                
+                sync_data = json.loads(body_bytes.decode('utf-8'))
+                key = sync_data.get("key")
+                if key:
+                    SERVER_KEY_REGISTRY[key] = {
+                        "name": sync_data.get("name"),
+                        "limit": int(sync_data.get("limit", 10)),
+                        "used": int(sync_data.get("used", 0)),
+                        "expires_at": sync_data.get("expires_at", "Lifetime"),
+                        "allowed_tools": sync_data.get("allowed_tools", "all"),
+                        "suspended": sync_data.get("suspended", False),
+                        "deleted": sync_data.get("deleted", False)
+                    }
+                await send_json(send, {"status": "success"})
+                return
+            except Exception as e:
+                await send_json(send, {"status": "error", "message": str(e)}, 500)
+                return
+
+    elif path == "/admin/get_db":
+        await send_json(send, SERVER_KEY_REGISTRY)
+        return
+
+    elif path == "/admin/logs":
+        await send_json(send, {"logs": SYSTEM_LIVE_LOGS[:50]})
+        return
+
+    # --- ROUTE HANDLING FOR API ENDPOINTS ---
+    elif path.startswith("/api/"):
         endpoint = path.replace("/api/", "", 1)
         client_key = params.get("key")
-        
-        client_name = urllib.parse.unquote(params.get("client_name", "External Node"))
-        key_limit = int(params.get("key_limit", 100))
-        key_used = int(params.get("key_used", 0))
-        key_expiry = urllib.parse.unquote(params.get("key_expires", "Lifetime"))
-        allowed_tools = urllib.parse.unquote(params.get("key_tools", "all"))
-        is_suspended = params.get("key_suspended", "false").lower() == "true"
 
         if not client_key:
-            await send_json(send, {"error": "Missing client authorization token. DM FOR BUY NEW API"}, 403)
+            await send_json(send, {"error": "Missing client authorization token. DM for new key purchased"}, 403)
             return
 
-        # 1. SUSPENSION CHECK
-        if is_suspended:
-            await send_json(send, {"error": "Access Denied. This API key is suspended. DM FOR BUY NEW API"}, 403)
+        # Fetch live data from Server-Side Dictionary or fallback to query params
+        if client_key in SERVER_KEY_REGISTRY:
+            key_profile = SERVER_KEY_REGISTRY[client_key]
+        else:
+            # Fallback if dictionary was cleared
+            key_profile = {
+                "limit": int(params.get("key_limit", 10)),
+                "used": int(params.get("key_used", 0)),
+                "expires_at": params.get("key_expires", "Lifetime"),
+                "allowed_tools": params.get("key_tools", "all"),
+                "suspended": str(params.get("key_suspended", "false")).lower() == "true",
+                "deleted": str(params.get("key_deleted", "false")).lower() == "true"
+            }
+
+        # 1. CRITICAL DELETION CHECK
+        if key_profile.get("deleted"):
+            await send_json(send, {"error": "DM for new key purchased"}, 403)
             return
 
-        # 2. HARD CORRECTION: LIMIT ENFORCEMENT CHECK
-        if key_used >= key_limit:
-            await send_json(send, {"error": "Quota Limit Finished! DM FOR BUY NEW API"}, 429)
+        # 2. CRITICAL SUSPENSION CHECK
+        if key_profile.get("suspended"):
+            await send_json(send, {"error": "The key is suspended by the author or admin"}, 403)
             return
 
-        # 3. EXPIRY CHECK (IST BASED)
-        if key_expiry != "Lifetime":
+        # 3. REALTIME EXPIRY CHECK (IST MATCH)
+        key_expiry = key_profile.get("expires_at", "Lifetime")
+        if key_expiry != "Lifetime" and key_expiry != "---":
             try:
                 current_time = get_current_ist()
                 expiry_dt = datetime.strptime(key_expiry, "%Y-%m-%d %H:%M:%S")
-                if current_time > expiry_dt:
-                    await send_json(send, {"error": f"API Key Expired ({key_expiry} IST). DM FOR BUY NEW API"}, 403)
+                if current_time >= expiry_dt:
+                    await send_json(send, {"error": "The key is expired. Please buy a new key"}, 403)
                     return
             except Exception:
                 pass
 
-        # 4. ENDPOINT SCOPE LOCK
+        # 4. QUOTA LIMIT FINISHED CHECK
+        if key_profile.get("used", 0) >= key_profile.get("limit", 10):
+            await send_json(send, {"error": "Your limit was finished. DM for new key purchased"}, 429)
+            return
+
+        # 5. ENDPOINT MATRIX LOCK
+        allowed_tools = key_profile.get("allowed_tools", "all")
         if allowed_tools != "all":
             allowed_list = [t.strip().lower() for t in allowed_tools.split(",")]
             if endpoint.lower() not in allowed_list:
-                await send_json(send, {"error": "Access Denied. Endpoint restriction active. DM FOR BUY NEW API"}, 403)
+                await send_json(send, {"error": "Access Denied. Endpoint restriction active. DM for new key purchased"}, 403)
                 return
 
+        # Increment use count directly inside server side memory registry
+        if client_key in SERVER_KEY_REGISTRY:
+            SERVER_KEY_REGISTRY[client_key]["used"] += 1
+        else:
+            SERVER_KEY_REGISTRY[client_key] = key_profile
+            SERVER_KEY_REGISTRY[client_key]["used"] += 1
+
+        # Clean validation tokens from target destination params
         cleaned_params = {}
         for k, v in params.items():
-            if k not in ["key", "client_name", "key_limit", "key_used", "key_expires", "key_tools", "key_suspended"]:
+            if k not in ["key", "client_name", "key_limit", "key_used", "key_expires", "key_tools", "key_suspended", "key_deleted"]:
                 cleaned_params[k] = v
         
-        # LOGGING ENGINE SYSTEM
         SYSTEM_LIVE_LOGS.insert(0, {
             "timestamp": get_current_ist().strftime("%Y-%m-%d %H:%M:%S"),
             "key": client_key,
@@ -124,19 +187,16 @@ async def app(scope, receive, send):
         
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(upstream_url, params=cleaned_params, timeout=12.0)
+                response = await client.get(upstream_url, params=cleaned_params, timeout=15.0)
                 raw_response_json = response.json()
                 scrubbed_response_json = scrub_legacy_branding(raw_response_json)
                 await send_json(send, scrubbed_response_json, response.status_code)
                 return
             except Exception:
-                await send_json(send, {"error": "Target backend network timeout. DM FOR BUY NEW API"}, 502)
+                await send_json(send, {"error": "Target backend network timeout. DM for new key purchased"}, 502)
                 return
 
-    elif path == "/admin/logs":
-        await send_json(send, {"logs": SYSTEM_LIVE_LOGS[:50]})
-        return
-
+    # --- MAIN HTML INTERFACE ---
     elif path == "/":
         checkbox_grid_html = "".join([f"""
         <div class="relative">
@@ -148,7 +208,7 @@ async def app(scope, receive, send):
         """ for tool in CORE_API_ENDPOINTS])
 
         sandbox_grid_html = "".join([f"""
-        <button type="button" onclick="bindSandboxTarget(this, '{tool}')" class="p-2 rounded-lg tool-btn text-center font-mono text-[11px] uppercase tracking-wider text-gray-400 {'active' if idx == 0 else ''}">
+        <button type="button" id="sandbox_btn_{tool}" onclick="bindSandboxTarget(this, '{tool}')" class="p-2 rounded-lg tool-btn text-center font-mono text-[11px] uppercase tracking-wider text-gray-400 {'active' if idx == 0 else ''}">
             {tool}
         </button>
         """ for idx, tool in enumerate(CORE_API_ENDPOINTS)])
@@ -217,19 +277,19 @@ async def app(scope, receive, send):
                         <div class="text-xs font-mono text-purple-400">CONSOLE DEVELOPER: <a href="{CHANNEL_URL}" target="_blank" class="underline font-bold text-cyan-300">{DEVELOPER_NAME}</a></div>
                     </div>
                     <div>
-                        <span class="text-[11px] bg-cyan-950 px-3 py-1 rounded border border-cyan-500 font-bold tracking-widest">IST_ENGINE_ONLINE</span>
+                        <span class="text-[11px] bg-cyan-950 px-3 py-1 rounded border border-cyan-500 font-bold tracking-widest">IST_ENGINE_CONNECTED</span>
                     </div>
                 </header>
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <!-- KEY PROVISION CONTROLLER -->
+                    <!-- CONTROLLER GENERATOR -->
                     <div class="glow-panel-cyan p-4 rounded-xl space-y-4">
                         <form id="tokenGenerationForm" onsubmit="commitNewTokenToRegistry(event)" class="space-y-3 text-xs">
                             <h2 class="text-xs font-bold text-cyan-400 uppercase tracking-wider border-b border-cyan-900 pb-1.5">GENERATE API ROUTE</h2>
                             
                             <div>
                                 <label class="block text-gray-400 mb-1 font-mono">CLIENT ASSIGNMENT ID</label>
-                                <input type="text" id="inputClientName" placeholder="Client Username" required class="w-full rounded-lg p-2 font-mono">
+                                <input type="text" id="inputClientName" placeholder="Client Name" required class="w-full rounded-lg p-2 font-mono">
                             </div>
                             <div>
                                 <label class="block text-gray-400 mb-1 font-mono">SYSTEM INJECTION API KEY</label>
@@ -243,17 +303,16 @@ async def app(scope, receive, send):
                                 <div>
                                     <label class="block text-gray-400 mb-1 font-mono">EXPIRY METHOD</label>
                                     <select id="expiryModeSelector" onchange="toggleExpiryInputView()" class="w-full rounded-lg p-2 bg-black font-mono">
-                                        <option value="custom">Select Date/Time</option>
+                                        <option value="custom">Select Month Chart</option>
                                         <option value="lifetime">Lifetime Access</option>
                                     </select>
                                 </div>
                                 <div>
                                     <label class="block text-gray-400 mb-1 font-mono">LIMIT THRESHOLD</label>
-                                    <input type="number" id="inputQuotaLimit" value="100" required class="w-full rounded-lg p-2 font-mono">
+                                    <input type="number" id="inputQuotaLimit" value="10" required class="w-full rounded-lg p-2 font-mono">
                                 </div>
                             </div>
 
-                            <!-- CUSTOM DATE/TIME CHART PICKER -->
                             <div id="customDateTimePickerBox">
                                 <label class="block text-gray-400 mb-1 font-mono">CHOOSE EXPIRY DATE & TIME (IST)</label>
                                 <input type="datetime-local" id="inputCustomDateTime" onchange="updateCalculatedExpiry()" class="w-full rounded-lg p-2 font-mono text-green-400">
@@ -277,11 +336,11 @@ async def app(scope, receive, send):
                         </form>
                     </div>
 
-                    <!-- CENTRAL NETWORK DATABASE -->
+                    <!-- CLOUD DATABASE MATRIX -->
                     <div class="lg:col-span-2 glow-panel-purple p-4 rounded-xl flex flex-col h-[520px]">
-                        <h2 class="text-xs font-bold text-purple-400 uppercase tracking-wider border-b border-purple-900 pb-1.5 mb-2">ACTIVE CLOUD AUTHORIZATION DATABASE</h2>
+                        <h2 class="text-xs font-bold text-purple-400 uppercase tracking-wider border-b border-purple-900 pb-1.5 mb-2">ACTIVE AUTHORIZATION DATABASE</h2>
                         <div class="overflow-x-auto overflow-y-auto flex-1 w-full text-[11px]">
-                            <table class="w-full text-left min-w-[700px]">
+                            <table class="w-full text-left min-w-[720px]">
                                 <thead>
                                     <tr class="border-b border-purple-950 text-gray-500 font-mono text-[10px]">
                                         <th class="pb-1.5">CLIENT</th>
@@ -298,7 +357,7 @@ async def app(scope, receive, send):
                     </div>
                 </div>
 
-                <!-- LIVE VIEW USER LOGS PACKETS -->
+                <!-- TRAFFIC VIEW LOGS -->
                 <div class="glow-panel-cyan p-4 rounded-xl space-y-2">
                     <div class="flex justify-between items-center border-b border-cyan-900 pb-1.5">
                         <h2 class="text-xs font-bold text-cyan-400 tracking-wider">LIVE TRAFFIC VIEW LOGS (USER SEARCH HISTORIES)</h2>
@@ -321,7 +380,7 @@ async def app(scope, receive, send):
                     </div>
                 </div>
 
-                <!-- SANDBOX ENVIRONMENT -->
+                <!-- ATTACK SANDBOX PROBE CONSOLE -->
                 <div class="glow-panel-cyan p-4 rounded-xl space-y-3">
                     <h2 class="text-xs font-bold text-cyan-400 uppercase tracking-wider border-b border-cyan-900 pb-1">CYBER ATTACK PROBE SANDBOX CONSOLE</h2>
                     <div class="grid grid-cols-4 sm:grid-cols-7 lg:grid-cols-10 gap-1 text-[10px]">{sandbox_grid_html}</div>
@@ -390,21 +449,56 @@ async def app(scope, receive, send):
                     return checked.length > 0 ? checked.join(', ') : "all";
                 }}
 
-                function loadRegistriesViewTableMatrix() {{
-                    const db = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
+                function getSystemIstDateObject() {{
+                    const d = new Date();
+                    const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+                    return new Date(utc + (3600000 * 5.5));
+                }}
+
+                // Core logic to sync any state update straight to python server side memory
+                async function syncKeyToServerRegistry(key, profileObj) {{
+                    try {{
+                        await fetch('/admin/sync_key', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ key: key, ...profileObj }})
+                        }});
+                    }} catch(e) {{ console.error("Sync failure", e); }}
+                }}
+
+                async function loadRegistriesViewTableMatrix() {{
+                    // Pull real live state counts from python backend database first to display exact counts
+                    let serverDb = {{}};
+                    try {{
+                        const res = await fetch('/admin/get_db');
+                        serverDb = await res.json();
+                    }} catch(e) {{}}
+
+                    const localDb = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
+                    
+                    // Merge live server-side memory count data into frontend local storage configuration state
+                    for(const key of Object.keys(localDb)) {{
+                        if(serverDb[key]) {{
+                            localDb[key].used = serverDb[key].used;
+                            localDb[key].suspended = serverDb[key].suspended;
+                            localDb[key].deleted = serverDb[key].deleted;
+                        }}
+                    }}
+                    localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(localDb));
+
                     const targetBody = document.getElementById('registryTableElementRows');
                     targetBody.innerHTML = '';
-
-                    // Local time checking emulation matching backend logic
-                    const now = new Date();
+                    const nowIST = getSystemIstDateObject();
                     
-                    for(const [key, profile] of Object.entries(db)) {{
+                    for(const [key, profile] of Object.entries(localDb)) {{
+                        if (profile.deleted === true) continue;
+
                         let timeStatusHtml = profile.expires_at;
                         let isExpired = false;
                         
-                        if(profile.expires_at !== "Lifetime") {{
+                        if(profile.expires_at !== "Lifetime" && profile.expires_at !== "---") {{
                             const expiryTime = new Date(profile.expires_at.replace(' ', 'T'));
-                            if(now > expiryTime) {{
+                            if(nowIST >= expiryTime) {{
                                 isExpired = true;
                                 timeStatusHtml = `<span class="text-red-500 font-bold animate-pulse">[EXPIRED]</span>`;
                             }}
@@ -412,8 +506,8 @@ async def app(scope, receive, send):
 
                         const isLimitReached = parseInt(profile.used) >= parseInt(profile.limit);
                         const quotaDisplay = isLimitReached 
-                            ? `<span class="text-red-500 font-bold">${{profile.used}}/${{profile.limit}} [LIMIT FINISHED]</span>`
-                            : `<span class="text-green-400">${{profile.used}}/${{profile.limit}}</span>`;
+                            ? `<span class="text-red-500 font-bold">${{profile.used}}/${{profile.limit}} [FINISHED]</span>`
+                            : `<span class="text-green-400 font-bold">${{profile.used}}/${{profile.limit}}</span>`;
 
                         const stateSuspended = profile.suspended === true;
                         
@@ -428,13 +522,13 @@ async def app(scope, receive, send):
                         targetBody.innerHTML += `
                             <tr class="hover:bg-purple-950 hover:bg-opacity-20 transition-colors">
                                 <td class="py-2.5 text-white font-bold border-b border-purple-950">${{profile.name}}</td>
-                                <td class="py-2.5 text-cyan-300 font-bold cursor-pointer border-b border-purple-950" onclick="document.getElementById('targetSandboxKeyField').value='${{key}}'">${{key}}</td>
+                                <td class="py-2.5 text-cyan-300 font-bold cursor-pointer border-b border-purple-950" onclick="selectKeyToSandbox('${{key}}')">${{key}}</td>
                                 <td class="py-2.5 border-b border-purple-950">${{quotaDisplay}}</td>
                                 <td class="py-2.5 border-b border-purple-950 text-[10px] text-gray-400">${{timeStatusHtml}}</td>
                                 <td class="py-2.5 border-b border-purple-950">${{statusBadge}}</td>
                                 <td class="py-2.5 text-right text-[10px] border-b border-purple-950">
                                     ${{suspendActionBtn}}
-                                    <button onclick="resetKeyQuotaCounter('${{key}}')" class="text-blue-400 hover:underline mr-1.5">RE-LIMIT / RESTART</button>
+                                    <button onclick="resetKeyQuotaCounter('${{key}}')" class="text-blue-400 hover:underline mr-1.5">RE-LIMIT</button>
                                     <button onclick="purgeKey('${{key}}')" class="text-red-500 hover:underline font-bold">DELETE</button>
                                 </td>
                             </tr>
@@ -442,34 +536,43 @@ async def app(scope, receive, send):
                     }}
                 }}
 
-                function toggleKeySuspensionState(key, setSuspended) {{
+                function selectKeyToSandbox(key) {{
+                    document.getElementById('targetSandboxKeyField').value = key;
+                }}
+
+                async function toggleKeySuspensionState(key, setSuspended) {{
                     const db = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
                     if(db[key]) {{
                         db[key].suspended = setSuspended;
                         localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(db));
+                        await syncKeyToServerRegistry(key, db[key]);
                         loadRegistriesViewTableMatrix();
                     }}
                 }}
 
-                function resetKeyQuotaCounter(key) {{
+                async function resetKeyQuotaCounter(key) {{
                     const db = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
                     if(db[key]) {{
-                        db[key].used = 0; // Reset logs/counter completely to zero
+                        db[key].used = 0; 
                         localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(db));
+                        await syncKeyToServerRegistry(key, db[key]);
                         loadRegistriesViewTableMatrix();
                     }}
                 }}
 
-                function purgeKey(key) {{
-                    if(confirm(`Completely destroy authorization registry for key: "${{key}}"? All background routing ends instantly.`)) {{
+                async function purgeKey(key) {{
+                    if(confirm(`Completely destroy authorization registry for key: "${{key}}"?`)) {{
                         const db = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
-                        delete db[key];
-                        localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(db));
+                        if(db[key]) {{
+                            db[key].deleted = true; 
+                            localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(db));
+                            await syncKeyToServerRegistry(key, db[key]);
+                        }}
                         loadRegistriesViewTableMatrix();
                     }}
                 }}
 
-                function commitNewTokenToRegistry(e) {{
+                async function commitNewTokenToRegistry(e) {{
                     e.preventDefault();
                     const name = document.getElementById('inputClientName').value;
                     const key = document.getElementById('inputLicenseKey').value.trim();
@@ -477,9 +580,13 @@ async def app(scope, receive, send):
                     const expiryTime = document.getElementById('expiryPreviewDisplay').innerText;
                     
                     const activeDb = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
-                    activeDb[key] = {{ name, limit, used: 0, expires_at: expiryTime, allowed_tools: compileScopes(), suspended: false }};
+                    const newProfile = {{ name, limit, used: 0, expires_at: expiryTime, allowed_tools: compileScopes(), suspended: false, deleted: false }};
                     
+                    activeDb[key] = newProfile;
                     localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(activeDb));
+                    
+                    await syncKeyToServerRegistry(key, newProfile);
+
                     document.getElementById('tokenGenerationForm').reset();
                     triggerKeyGen();
                     document.getElementById('expiryModeSelector').value = "custom";
@@ -502,33 +609,21 @@ async def app(scope, receive, send):
                     const key = document.getElementById('targetSandboxKeyField').value.trim();
                     const terminal = document.getElementById('sandboxResponseTerminal');
 
-                    if(!key) return alert("Please map or write an active configuration validation key!");
+                    if(!key) return alert("Please select or write a valid execution API key token!");
                     
-                    const db = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
-                    
-                    // FIXED: Load accurate realtime local sync values to bypass Invalid Errors
-                    const profileData = db[key];
-                    if(!profileData) {{
-                        alert("Key not found in local system registry. Sync broken.");
-                        return;
-                    }}
-
                     terminal.classList.remove('hidden');
                     terminal.innerText = "Transmitting framework routing packets downstream...";
 
-                    const url = `/api/${{endpoint}}?key=${{key}}&client_name=${{profileData.name}}&key_limit=${{profileData.limit}}&key_used=${{profileData.used}}&key_expires=${{encodeURIComponent(profileData.expires_at)}}&key_tools=${{profileData.allowed_tools}}&key_suspended=${{profileData.suspended}}&num=7003741482`;
+                    const url = `/api/${{endpoint}}?key=${{key}}&num=7003741482`;
 
                     try {{
                         const res = await fetch(url);
                         const data = await res.json();
-                        
-                        if(res.ok && !data.error) {{
-                            db[key].used = parseInt(db[key].used) + 1;
-                            localStorage.setItem('NEXUS_REGISTRIES_DATABASE', JSON.stringify(db));
-                            loadRegistriesViewTableMatrix();
-                        }}
                         terminal.innerText = JSON.stringify(data, null, 4);
-                    }} catch(e) {{ terminal.innerText = "Error framework stack: " + e.toString(); }}
+                    }} catch(e) {{ 
+                        terminal.innerText = "Error framework stack: " + e.toString(); 
+                    }}
+                    await loadRegistriesViewTableMatrix();
                     syncTelemetryLogsFeed();
                 }}
 
@@ -557,18 +652,28 @@ async def app(scope, receive, send):
                     }} catch(e) {{}}
                 }}
 
-                window.onload = function() {{
+                // Push current local items to server memory stack upon page wake initialization
+                async function syncAllStoredKeysOnStartup() {{
+                    const localDb = JSON.parse(localStorage.getItem('NEXUS_REGISTRIES_DATABASE') || '{{}}');
+                    for (const [key, profile] of Object.entries(localDb)) {{
+                        await syncKeyToServerRegistry(key, profile);
+                    }}
+                }}
+
+                window.onload = async function() {{
                     triggerKeyGen();
-                    
-                    // Preset datetime picker to current Indian Local Time default HTML string
                     const now = new Date();
                     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
                     document.getElementById('inputCustomDateTime').value = now.toISOString().slice(0,16);
                     
                     toggleExpiryInputView();
-                    loadRegistriesViewTableMatrix();
+                    await syncAllStoredKeysOnStartup();
+                    await loadRegistriesViewTableMatrix();
                     syncTelemetryLogsFeed();
-                    setInterval(syncTelemetryLogsFeed, 5000);
+                    
+                    // Periodic auto sync update checking loops
+                    setInterval(loadRegistriesViewTableMatrix, 3000);
+                    setInterval(syncTelemetryLogsFeed, 4000);
                 }}
             </script>
         </body>
