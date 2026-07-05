@@ -4,6 +4,12 @@ import json
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template_string
 
+# ---- INITIATE FLASK INSTANCE ----
+# Vercel বিল্ডার যাতে শুরুতেই অ্যাপ অবজেক্টটি পেয়ে যায়, তাই একে ওপরে ডিফাইন করা হলো
+app = Flask(__name__)
+app.url_map.strict_slashes = False
+handler = app # Vercel WSGI/ASGI রানটাইমের জন্য ব্যাকআপ হ্যান্ডলার
+
 # ---- CORE SYSTEM GATEWAY SETTINGS ----
 MASTER_API_KEY = "vx-osint"
 TARGET_BASE_URL = "https://ft-osint-api.duckdns.org/api"
@@ -71,10 +77,6 @@ def scrub_legacy_branding(data):
     elif isinstance(data, list):
         for item in data: scrub_legacy_branding(item)
     return data
-
-# ---- INITIATE FLASK INSTANCE ----
-app = Flask(__name__)
-app.url_map.strict_slashes = False
 
 # --- HTML ADVANCED CYBER UI MATRIX ---
 @app.route('/', methods=['GET'])
