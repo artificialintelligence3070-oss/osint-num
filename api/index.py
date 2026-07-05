@@ -26,10 +26,6 @@ GLOBAL_REGISTRY_BUFFER = {}
 GLOBAL_LOGS_BUFFER = []
 HAS_INITIALIZED = False
 
-# ---- EXPORTABLE APP VARIABLE FOR VERCEL HANDLER ----
-app = Flask(__name__)
-app.url_map.strict_slashes = False
-
 # ---- PERFECT TIMEZONE ENGINE ----
 def get_current_ist() -> datetime:
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
@@ -75,6 +71,10 @@ def scrub_legacy_branding(data):
     elif isinstance(data, list):
         for item in data: scrub_legacy_branding(item)
     return data
+
+# ---- INITIATE FLASK INSTANCE ----
+app = Flask(__name__)
+app.url_map.strict_slashes = False
 
 # --- HTML ADVANCED CYBER UI MATRIX ---
 @app.route('/', methods=['GET'])
@@ -154,7 +154,6 @@ def render_dashboard_panel():
                         <h1 class="text-2xl font-bold tracking-widest text-cyan-400" style="text-shadow: 0 0 12px #00ffff;">NEXUS COMMAND CENTER V4</h1>
                         <div class="text-xs font-mono text-purple-400">LEAD ARCHITECT: <a href="{CHANNEL_URL}" target="_blank" class="underline font-bold text-cyan-300">{DEVELOPER_NAME}</a></div>
                     </div>
-                    <!-- METRICS ENGINE ANALYTICS BOARD -->
                     <div class="grid grid-cols-4 gap-2 text-[10px] font-mono">
                         <div class="bg-gray-950 border border-cyan-900 px-2 py-1 rounded text-center">TOTAL: <span id="mTotal" class="text-white font-bold">0</span></div>
                         <div class="bg-gray-950 border border-green-900 px-2 py-1 rounded text-center">LIVE: <span id="mActive" class="text-green-400 font-bold">0</span></div>
@@ -164,7 +163,6 @@ def render_dashboard_panel():
                 </header>
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <!-- LEFT COLUMN PANEL: CREATION CONTROLS -->
                     <div class="glow-panel-cyan p-4 rounded-xl space-y-4">
                         <form id="tokenGenerationForm" onsubmit="commitNewTokenToRegistry(event)" class="space-y-3 text-xs">
                             <h2 class="text-xs font-bold text-cyan-400 uppercase tracking-wider border-b border-cyan-900 pb-1.5">INJECT LICENSE RECORD</h2>
@@ -217,7 +215,6 @@ def render_dashboard_panel():
                             <button type="submit" class="w-full neon-btn-green font-bold py-2.5 rounded uppercase tracking-widest text-xs">COMMIT KEY DATA</button>
                         </form>
 
-                        <!-- DEVELOPER CONFIG MATRIX CONFIGURATOR -->
                         <div class="border border-purple-900 p-3 rounded bg-black bg-opacity-40 space-y-2 text-[11px]">
                             <h3 class="text-purple-400 font-bold uppercase tracking-wider text-[10px] border-b border-purple-900 pb-1">Live Engine Switchboard</h3>
                             <div>
@@ -228,17 +225,14 @@ def render_dashboard_panel():
                         </div>
                     </div>
 
-                    <!-- RIGHT COLUMN PANEL: SEARCH, CONTROLS, DATABASE -->
                     <div class="lg:col-span-2 glow-panel-purple p-4 rounded-xl flex flex-col h-[580px] space-y-3">
                         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-purple-900 pb-2">
                             <h2 class="text-xs font-bold text-purple-400 uppercase tracking-wider">ACTIVE ACCESS REGISTRY REPOSITORY</h2>
-                            <!-- SEARCH FIELD SYSTEM -->
                             <div class="w-full sm:w-auto">
                                 <input type="text" id="databaseSearchQueryField" oninput="triggerDatabaseLocalFilter()" placeholder="🔍 Quick Filter Registry..." class="w-full sm:w-48 p-1.5 rounded text-xs">
                             </div>
                         </div>
 
-                        <!-- BULK ACTIONS MANAGER TOOLBOX -->
                         <div class="flex flex-wrap gap-2 p-2 bg-black border border-purple-950 rounded text-[10px]">
                             <span class="text-gray-500 font-bold self-center mr-1">BULK CONTROLS:</span>
                             <button onclick="executeBulkOperation('purge_expired')" class="bg-red-950 text-red-400 border border-red-800 px-2 py-0.5 rounded hover:bg-red-900">Purge Expired Keys</button>
@@ -264,7 +258,6 @@ def render_dashboard_panel():
                     </div>
                 </div>
 
-                <!-- LIVE CONSOLE CONTROLS PIPELINE -->
                 <div class="glow-panel-cyan p-4 rounded-xl space-y-2">
                     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-cyan-900 pb-1.5 gap-2">
                         <h2 class="text-xs font-bold text-cyan-400 tracking-wider">LIVE TELEMETRY TRAFFIC FEED SOCK PIPELINE</h2>
@@ -290,9 +283,7 @@ def render_dashboard_panel():
                     </div>
                 </div>
 
-                <!-- INTEGRATION HELPER MATRIX SCRIPT BUILDER -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <!-- CYBERATTACK SANDBOX TESTING UNIT -->
                     <div class="glow-panel-cyan p-4 rounded-xl space-y-3">
                         <h2 class="text-xs font-bold text-cyan-400 uppercase tracking-wider border-b border-cyan-900 pb-1">PROBE REQUEST SIMULATOR CONSOLE</h2>
                         <div class="grid grid-cols-4 sm:grid-cols-7 gap-1 text-[9px]">{sandbox_grid_html}</div>
@@ -310,7 +301,6 @@ def render_dashboard_panel():
                         <div id="sandboxResponseTerminal" class="hidden p-2 bg-black border border-cyan-900 rounded font-mono text-[10px] text-green-400 max-h-48 overflow-y-auto whitespace-pre-wrap"></div>
                     </div>
 
-                    <!-- CLIENT API INTEGRATION SNIPPETS GENERATOR -->
                     <div class="glow-panel-purple p-4 rounded-xl space-y-3 flex flex-col justify-between">
                         <div>
                             <h2 class="text-xs font-bold text-purple-400 uppercase tracking-wider border-b border-purple-900 pb-1 mb-2">Automated SDK Client Documentation Builder</h2>
@@ -735,4 +725,5 @@ def handle_api_routing(endpoint):
             return jsonify(scrubbed_response_json), response.status_code
     except Exception as e:
         return jsonify({"error": f"Internal Command Center Exception: {str(e)}"}), 500
+
 
