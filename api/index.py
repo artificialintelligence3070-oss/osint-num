@@ -26,6 +26,7 @@ GLOBAL_REGISTRY_BUFFER = {}
 GLOBAL_LOGS_BUFFER = []
 HAS_INITIALIZED = False
 
+# ---- EXPORTABLE APP VARIABLE FOR VERCEL HANDLER ----
 app = Flask(__name__)
 app.url_map.strict_slashes = False
 
@@ -218,7 +219,7 @@ def render_dashboard_panel():
 
                         <!-- DEVELOPER CONFIG MATRIX CONFIGURATOR -->
                         <div class="border border-purple-900 p-3 rounded bg-black bg-opacity-40 space-y-2 text-[11px]">
-                            <h3 class="text-purple-400 font-bold uppercase tracking-wider text-[10px] border-b border-purple-9ENTIAL pb-1">Live Engine Switchboard</h3>
+                            <h3 class="text-purple-400 font-bold uppercase tracking-wider text-[10px] border-b border-purple-900 pb-1">Live Engine Switchboard</h3>
                             <div>
                                 <label class="text-gray-500 block">Upstream Gateway Endpoint</label>
                                 <input type="text" id="cfgBaseUrl" value="{TARGET_BASE_URL}" class="w-full p-1 rounded text-xs opacity-70">
@@ -378,18 +379,15 @@ def render_dashboard_panel():
                     return checked.length > 0 ? checked.join(', ') : "all";
                 }}
 
-                // ---- ALERTS ENGINE MODULE WITH CONDITIONAL CRITICAL MAPPINGS ----
                 function buildDynamicExpiryMessage(expiresAtStr) {{
                     if (expiresAtStr === "Lifetime" || expiresAtStr === "---") {{
                         return `<span class="text-cyan-400 font-bold tracking-widest uppercase text-[10px]">🧬 Lifetime Key</span>`;
                     }}
 
-                    // কারেন্ট ডেট অবজেক্ট জেনারেট (Perfect User Context IST Clock Mapping)
                     const nowIST = new Date(new Date().getTime() + (3600000 * 5.5));
                     const targetDate = new Date(expiresAtStr.replace(' ', 'T'));
                     const diffMs = targetDate - nowIST;
 
-                    // ১. এক্সপায়ার হয়ে গেলে সম্পূর্ণ রে‍ড ব্লিংকিং লকড সাইন শো করবে
                     if (diffMs <= 0) {{
                         return `<span class="blink-critical">🔒 LOCK: KEY EXPIRED</span>`;
                     }}
@@ -397,7 +395,6 @@ def render_dashboard_panel():
                     const totalSeconds = Math.floor(diffMs / 1000);
                     const diffDays = diffMs / (1000 * 60 * 60 * 24);
 
-                    // ২. এক্সপায়ার হতে ২৪ ঘণ্টার কম বাকি থাকলে টাইমার কাউন্টডাউন শো করবে
                     if (diffMs <= 86400000) {{
                         const hours = Math.floor(totalSeconds / 3600);
                         const mins = Math.floor((totalSeconds % 3600) / 60);
@@ -407,12 +404,10 @@ def render_dashboard_panel():
                         </span>`;
                     }}
 
-                    // ৩. এক্সপায়ার হতে ১ থেকে ৩ দিন বাকি থাকলে ইয়োলো অ্যালার্ট মেসেজ ব্লিংক করবে
                     if (diffDays <= 3.0) {{
                         return `<span class="blink-warning text-yellow-400">⚠️ Expiring soon (${{expiresAtStr}})</span>`;
                     }}
 
-                    // ৪. ৩ দিনের বেশি সময় বাকি থাকলে সাধারণ গ্রিন টেক্সট শো করবে
                     return `<span class="text-green-400">${{expiresAtStr}}</span>`;
                 }}
 
@@ -508,7 +503,6 @@ def render_dashboard_panel():
                     document.getElementById('mLock').innerText = lock;
                 }}
 
-                // ---- INTUITIVE INSTANT SEARCH FILTERS ----
                 function triggerDatabaseLocalFilter() {{
                     let query = document.getElementById('databaseSearchQueryField').value.toLowerCase().trim();
                     document.querySelectorAll('.data-row-item').forEach(tr => {{
@@ -524,7 +518,6 @@ def render_dashboard_panel():
                     }});
                 }}
 
-                // ---- BULK OPERATIONS ENGINE INTERFACE ----
                 async function executeBulkOperation(action) {{
                     if(!confirm("Are you sure you want to execute this destructive bulk matrix command?")) return;
                     let updatedRegistry = {{...METADATA_REGISTRY_CACHE}};
@@ -646,7 +639,7 @@ def render_dashboard_panel():
                     document.getElementById('inputCustomDateTime').value = now.toISOString().slice(0,16);
                     toggleExpiryInputView();
                     await refreshDashboardMatrix();
-                    setInterval(refreshDashboardMatrix, 1000); // ১ সেকেন্ড পরপর নিখুঁত লাইভ ক্লক টাইমার সিঙ্ক
+                    setInterval(refreshDashboardMatrix, 1000);
                 }}
 
                 window.onload = function() {{
@@ -684,7 +677,7 @@ def admin_get_db():
     except Exception as e:
         return jsonify({"registry": {}, "logs": [], "error": str(e)})
 
-# --- MAIN ENGINE API ROUTING PROCESSOR (STRICT USER TIMING ALGORITHMS) ---
+# --- MAIN ENGINE API ROUTING PROCESSOR ---
 @app.route('/api/<endpoint>', methods=['GET'])
 def handle_api_routing(endpoint):
     try:
@@ -699,14 +692,12 @@ def handle_api_routing(endpoint):
         if str(key_profile.get("suspended")).lower() in ["true", "1", "yes"]:
             return jsonify({"error": "The key is suspended by the author or admin"}), 403
 
-        # ---- STRICT IST TIME VALIDATION ENGINE ----
         key_expiry = key_profile.get("expires_at", "Lifetime")
         if "Lifetime" not in key_expiry and "---" not in key_expiry:
             try:
                 current_time = get_current_ist()
                 expiry_dt = datetime.strptime(key_expiry, "%Y-%m-%d %H:%M:%S")
                 
-                # যদি এক্সপায়ার টাইম পার হয়ে যায়, তবে স্ট্রিক্ট ব্লকিং রিকোয়েস্ট ফায়ার হবে
                 if current_time >= expiry_dt:
                     return jsonify({"error": f"The key is expired on {key_expiry} (IST). Please buy a new key"}), 403
             except Exception:
@@ -721,7 +712,6 @@ def handle_api_routing(endpoint):
             if endpoint.lower() not in allowed_list:
                 return jsonify({"error": "Access Denied. Endpoint restriction active. DM for new key purchased"}), 403
 
-        # কোটা ট্র্যাকিং হিট রেন্ডার
         registry[client_key]["used"] = int(registry[client_key].get("used", 0)) + 1
         
         cleaned_params = {k: v for k, v in request.args.items() if k != "key"}
@@ -731,7 +721,7 @@ def handle_api_routing(endpoint):
             "endpoint": endpoint,
             "params": str(cleaned_params)
         })
-        logs = logs[:100] # মেমোরি বাফার ক্যাশ ম্যানেজমেন্ট
+        logs = logs[:100]
 
         push_cloud_state(registry, logs)
 
@@ -745,3 +735,4 @@ def handle_api_routing(endpoint):
             return jsonify(scrubbed_response_json), response.status_code
     except Exception as e:
         return jsonify({"error": f"Internal Command Center Exception: {str(e)}"}), 500
+
